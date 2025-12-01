@@ -31,8 +31,7 @@ v2sp is a multi-node management backend that bridges self-hosted panels with Xra
 ### Installation
 
 ```bash
-wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh
-bash install.sh
+wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh && bash install.sh
 ```
 
 The installation script will:
@@ -171,12 +170,11 @@ All requests include the following query parameters:
 |-------------|--------|------------------------------------------------|
 | `action`    | string | API action (config, user, push, alive, etc.)   |
 | `node_id`   | int    | Node identifier                                |
-| `node_type` | string | Protocol type (vless, vmess, trojan, etc.)     |
 | `token`     | string | API key for authentication                     |
 
 **Example Request**
 ```
-GET /api/v2sp?action=user&node_id=1&node_type=vless&token=your_api_key
+GET /api/v2sp?action=config&node_id=1&token=your_api_key
 ```
 
 ### Response Format
@@ -204,44 +202,60 @@ No body, indicates cached data is still valid.
 
 Retrieves node configuration including protocol settings, TLS certificates, and routing rules.
 
+**Required Response Field**
+
+The API response MUST include `node_type` field. Supported protocol types:
+
+| node_type      | Description                                      |
+|----------------|--------------------------------------------------|
+| `vless`        | VLESS protocol (recommended for best performance)|
+| `vmess`        | VMess protocol                                   |
+| `trojan`       | Trojan protocol                                  |
+| `shadowsocks`  | Shadowsocks protocol (supports 2022 encryption)  |
+| `hysteria`     | Hysteria protocol                                |
+
 **Request Headers**
 ```
 If-None-Match: "config-etag-value"
 ```
 
 **Response** (HTTP 200)
+
+VLESS/VMess example:
 ```json
 {
-  "Log": {
-    "Level": "info",
-    "Output": "/var/log/v2sp/access.log"
+  "node_type": "vless",
+  "server_port": 443,
+  "network": "tcp",
+  "networkSettings": {},
+  "tls": 1,
+  "tls_settings": {
+    "server_name": "example.com"
   },
-  "Cores": [
-    {
-      "Type": "xray",
-      "AssetPath": "/etc/v2sp/",
-      "DnsConfigPath": "/etc/v2sp/dns.json",
-      "RouteConfigPath": "/etc/v2sp/route.json"
-    }
-  ],
-  "Nodes": [
-    {
-      "ApiHost": "https://panel.example.com",
-      "ApiKey": "your_api_key",
-      "NodeID": 1,
-      "NodeType": "vless",
-      "Timeout": 30,
-      "ListenIP": "0.0.0.0",
-      "SendIP": "0.0.0.0",
-      "EnableXTLS": true,
-      "CertConfig": {
-        "CertMode": "dns",
-        "CertDomain": "node1.example.com",
-        "Provider": "cloudflare",
-        "Email": "admin@example.com"
-      }
-    }
-  ]
+  "security_settings": {
+    "public_key": "...",
+    "short_id": "..."
+  }
+}
+```
+
+Trojan example:
+```json
+{
+  "node_type": "trojan",
+  "server_port": 443,
+  "host": "example.com",
+  "server_name": "example.com"
+}
+```
+
+Shadowsocks example:
+```json
+{
+  "node_type": "shadowsocks",
+  "server_port": 8388,
+  "cipher": "2022-blake3-aes-128-gcm",
+  "server_key": "base64_encoded_key"
 }
 ```
 
@@ -459,11 +473,9 @@ The main configuration file (`config.json`) defines logging, core settings, and 
   ],
   "Nodes": [
     {
-      "Core": "xray",
       "ApiHost": "https://panel.example.com",
       "ApiKey": "your_secure_api_key",
       "NodeID": 1,
-      "NodeType": "vless",
       "Timeout": 30,
       "ListenIP": "0.0.0.0",
       "SendIP": "0.0.0.0",
