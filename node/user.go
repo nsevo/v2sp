@@ -1,8 +1,6 @@
 package node
 
 import (
-	"strconv"
-
 	"github.com/nsevo/v2sp/api/panel"
 	log "github.com/sirupsen/logrus"
 )
@@ -59,25 +57,36 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 	return nil
 }
 
-func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[string]int)
-	for i, user := range old {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		oldMap[key] = i
+func compareUserList(old, new []panel.UserInfo) (deleted, added, updated []panel.UserInfo) {
+	// Use UUID as the unique key to track users
+	oldMap := make(map[string]panel.UserInfo)
+	for _, user := range old {
+		oldMap[user.Uuid] = user
 	}
 
-	for _, user := range new {
-		key := user.Uuid + strconv.Itoa(user.SpeedLimit)
-		if _, exists := oldMap[key]; !exists {
-			added = append(added, user)
+	for _, newUser := range new {
+		if oldUser, exists := oldMap[newUser.Uuid]; exists {
+			// User exists, check if any limits have changed
+			limitsChanged := oldUser.SpeedLimit != newUser.SpeedLimit ||
+				oldUser.DeviceLimit != newUser.DeviceLimit ||
+				oldUser.ConnLimit != newUser.ConnLimit
+
+			if limitsChanged {
+				// User limits changed, mark for update
+				updated = append(updated, newUser)
+			}
+			// Remove from map so we know this user wasn't deleted
+			delete(oldMap, newUser.Uuid)
 		} else {
-			delete(oldMap, key)
+			// New user, mark for addition
+			added = append(added, newUser)
 		}
 	}
 
-	for _, index := range oldMap {
-		deleted = append(deleted, old[index])
+	// Any remaining users in oldMap were deleted
+	for _, user := range oldMap {
+		deleted = append(deleted, user)
 	}
 
-	return deleted, added
+	return deleted, added, updated
 }

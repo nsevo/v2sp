@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juju/ratelimit"
 	"github.com/nsevo/v2sp/api/panel"
 	"github.com/nsevo/v2sp/common/format"
 	"github.com/nsevo/v2sp/conf"
-	"github.com/juju/ratelimit"
 )
 
 var limitLock sync.RWMutex
@@ -116,6 +116,42 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
 		l.UUIDtoUID[added[i].Uuid] = added[i].Id
+	}
+}
+
+// UpdateUserLimits updates the limit settings for existing users without disconnecting them
+func (l *Limiter) UpdateUserLimits(tag string, users []panel.UserInfo) {
+	for i := range users {
+		taguuid := format.UserTag(tag, users[i].Uuid)
+		if v, ok := l.UserLimitInfo.Load(taguuid); ok {
+			userLimit := v.(*UserLimitInfo)
+
+			// Update speed limit
+			if users[i].SpeedLimit != userLimit.SpeedLimit {
+				userLimit.SpeedLimit = users[i].SpeedLimit
+				// Delete old rate limiter bucket so a new one will be created on next connection
+				// This ensures the new speed limit takes effect immediately for new data transfer
+				l.SpeedLimiter.Delete(taguuid)
+			}
+
+			// Update device limit
+			if users[i].DeviceLimit != userLimit.DeviceLimit {
+				oldLimit := userLimit.DeviceLimit
+				userLimit.DeviceLimit = users[i].DeviceLimit
+				// If new limit is stricter (lower) and not zero, clear online device records
+				// This forces a recheck on next connection
+				if users[i].DeviceLimit > 0 && (oldLimit == 0 || users[i].DeviceLimit < oldLimit) {
+					l.UserOnlineIP.Delete(taguuid)
+				}
+			}
+
+			// Update connection limit
+			// Note: Existing connections won't be immediately closed
+			// The new limit will be enforced when the next connection is made
+			if users[i].ConnLimit != userLimit.ConnLimit {
+				userLimit.ConnLimit = users[i].ConnLimit
+			}
+		}
 	}
 }
 

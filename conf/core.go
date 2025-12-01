@@ -23,6 +23,6 @@ func (c *CoreConfig) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("unsupported core type: %s (only 'xray' is supported)", c.Type)
 	}
 	c.Type = "xray"
-	c.XrayConfig = NewXrayConfig()
-	return json.Unmarshal(b, c.XrayConfig)
+		c.XrayConfig = NewXrayConfig()
+		return json.Unmarshal(b, c.XrayConfig)
 }

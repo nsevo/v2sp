@@ -175,7 +175,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	if len(newU) == 0 {
 		return nil
 	}
-	deleted, added := compareUserList(c.userList, newU)
+	deleted, added, updated := compareUserList(c.userList, newU)
 	if len(deleted) > 0 {
 		// have deleted users
 		err = c.server.DelUsers(deleted, c.tag, c.info)
@@ -219,10 +219,15 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}
 		}
 	}
+	if len(updated) > 0 {
+		// have users with updated limits
+		c.limiter.UpdateUserLimits(c.tag, updated)
+		log.WithField("tag", c.tag).Infof("%d users limits updated", len(updated))
+	}
 	c.userList = newU
-	if len(added)+len(deleted) != 0 {
+	if len(added)+len(deleted)+len(updated) != 0 {
 		log.WithField("tag", c.tag).
-			Infof("%d user deleted, %d user added", len(deleted), len(added))
+			Infof("%d user deleted, %d user added, %d user limits updated", len(deleted), len(added), len(updated))
 	}
 	return nil
 }

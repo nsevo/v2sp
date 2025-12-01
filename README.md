@@ -1,90 +1,268 @@
 # v2sp
 
-v2sp 是自研面板配套的 Xray 节点端，使用官方 Xray-core，开箱即用，单实例即可管理多节点。
+A high-performance, production-ready Xray backend designed for self-hosted proxy panels. Built with official Xray-core, featuring comprehensive traffic management, intelligent connection handling, and seamless API integration.
 
-## Highlights
+## Overview
 
-- 基于官方 Xray-core v1.251201.0，支持 VLESS / VMess / Trojan / Shadowsocks / Hysteria 等协议
-- 设备/IP/速率/连接数限制、审计规则、DNS 分流等基础能力全部内建
-- 智能连接管理：连接数超限时自动替换最旧连接，提升用户体验
-- 支持自动申请 TLS/ACME 证书，支持 Reality、XTLS 等新特性
-- 透明的 JSON 配置，方便和自建脚本或面板联动
+v2sp is a multi-node management backend that bridges self-hosted panels with Xray-core. It provides enterprise-grade features including granular user limits, intelligent connection pooling, automated certificate management, and real-time traffic accounting—all through a simple, language-agnostic JSON API.
 
-## Install
+### Key Features
+
+**Core Capabilities**
+- Based on official Xray-core v1.251201.0 with full protocol support (VLESS, VMess, Trojan, Shadowsocks)
+- Multi-node management in a single process with independent configurations
+- Real-time traffic accounting with configurable reporting intervals
+- Automated TLS certificate provisioning via ACME with multiple DNS provider support
+
+**Traffic & Access Control**
+- Per-user speed limiting with dynamic rate adjustment
+- Device/IP-based connection limits with configurable thresholds
+- Intelligent connection pooling with automatic oldest-connection eviction
+- Protocol and domain-based traffic filtering and auditing
+
+**Advanced Features**
+- XTLS and Reality protocol support for enhanced performance and security
+- DNS-based traffic routing with custom rule sets
+- Graceful configuration reloading without service interruption
+- Comprehensive logging with structured output and log rotation
+
+## Quick Start
+
+### Installation
 
 ```bash
-wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh && bash install.sh
+wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh
+bash install.sh
 ```
 
-## Build
+The installation script will:
+1. Download the latest v2sp binary
+2. Generate default configuration files
+3. Set up systemd service
+4. Configure log rotation
+
+### Basic Usage
 
 ```bash
-# 本地构建
-go build -trimpath -ldflags "-s -w" -o v2sp main.go
+# Start service
+systemctl start v2sp
 
-# Linux AMD64 (生产环境)
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o v2sp-linux-amd64 main.go
+# Check status
+systemctl status v2sp
 
-# Linux ARM64 (ARM 服务器)
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o v2sp-linux-arm64 main.go
+# View logs
+journalctl -u v2sp -f
+
+# Reload configuration
+systemctl reload v2sp
 ```
 
-## Release
+## Architecture
 
-```bash
-./scripts/release.sh v1.0.2 "Short release notes"
+### Design Philosophy
+
+v2sp follows a composition-over-inheritance design pattern, integrating tightly with Xray-core while maintaining clean separation of concerns:
+
+```
+┌─────────────────────────────────────────────┐
+│           Panel API (HTTP/HTTPS)            │
+└──────────────────┬──────────────────────────┘
+                   │ JSON
+         ┌─────────▼─────────┐
+         │   API Client      │
+         │  (Auto Retry)     │
+         └─────────┬─────────┘
+                   │
+         ┌─────────▼─────────┐
+         │   Controller      │
+         │ (Node Manager)    │
+         └─────────┬─────────┘
+                   │
+    ┌──────────────┼──────────────┐
+    │              │              │
+┌───▼───┐    ┌────▼────┐    ┌───▼───┐
+│Limiter│    │ Counter │    │ Core  │
+│       │    │         │    │(Xray) │
+└───────┘    └─────────┘    └───┬───┘
+                                 │
+                    ┌────────────┼────────────┐
+                    │            │            │
+              ┌─────▼─────┐ ┌───▼────┐ ┌────▼────┐
+              │Dispatcher │ │Inbound │ │Outbound │
+              │ (Custom)  │ │        │ │         │
+              └───────────┘ └────────┘ └─────────┘
 ```
 
-该脚本会：
-- 确认工作区干净并推送 main
-- 打上 `v1.0.2` tag 并推送
-- 如果安装了 GitHub CLI，则自动创建 Release（否则可手动在网页发布）
+### Components
 
-## 单接口对接说明
+**API Client**: Handles panel communication with automatic retry, ETag caching, and connection pooling.
 
-v2sp 只需要一个 HTTP/HTTPS 入口即可。后端可以使用 PHP、Node.js、Go、Python 等任意语言实现，**接口必须返回标准 JSON 格式**。客户端会自动附带：
+**Controller**: Manages node lifecycle, coordinates user updates, and schedules periodic tasks (traffic reporting, online user tracking).
 
-| Query 参数  | 说明                                                                 |
-|-------------|----------------------------------------------------------------------|
-| `action`    | `config` / `user` / `alivelist` / `push` / `alive`                   |
-| `node_id`   | 节点 ID，整数                                                        |
-| `node_type` | 节点类型（`vmess/vless/trojan/shadowsocks/hysteria`）                |
-| `token`     | 后端配置的 API Key，用于鉴权                                        |
+**Limiter**: Enforces per-user rate limits, device limits, and connection limits using token bucket algorithms and concurrent-safe maps.
 
-### 重要：API 响应格式要求
+**Counter**: Tracks upload/download bytes per user with atomic operations for accurate accounting.
 
-**必须返回标准 JSON 格式：**
-- Content-Type: `application/json`
-- 使用标准 JSON 编码（UTF-8）
-- 支持 ETag 缓存（可选，但推荐）
-- 不支持 msgpack、protobuf 等其他格式
+**Custom Dispatcher**: Extends Xray's dispatcher to inject traffic accounting, rate limiting, and connection management into the data path without modifying core Xray code.
 
-各 `action` 的期望行为如下（支持返回 `4xx/5xx` 表达错误，`message` 字段用于描述原因）：
+## Features
 
-| action      | method | 请求体示例                                   | 作用概要 |
-|-------------|--------|----------------------------------------------|----------|
-| `config`    | GET    | 无                                           | 下发节点完整配置 |
-| `user`      | GET    | 无                                           | 返回可用用户列表 |
-| `alivelist` | GET    | 无                                           | 返回用户在线设备计数 |
-| `push`      | POST   | `{ "26":[uploadBytes,downloadBytes], ... }`  | 上报并累积流量 |
-| `alive`     | POST   | `{ "26":["1.1.1.1","2.2.2.2"], ... }`        | 上报在线 IP 列表 |
+### Traffic Management
 
-**config**
-- 必须返回 v2sp 能直接使用的完整 JSON（包含 `Log`、`Cores`、`Nodes`、`ApiHost` 等字段），建议与面板中的“节点详情”保持一致。
-- 可以设置 `ETag` 响应头；v2sp 会发送 `If-None-Match`，当配置无变化时可返回 `304 Not Modified`。
-- 若节点不存在或已禁用，应返回 `404` 或 `403`，并附带 `{ "message": "reason" }`。
+**Speed Limiting**
+- Per-user bandwidth control (Mbps)
+- Node-level bandwidth caps
+- Dynamic speed adjustment based on traffic patterns
+- Token bucket implementation for smooth rate limiting
 
-**user**
-- 返回 `{"users":[...]}` 数组，每个用户对象包含：
-  - `id` (int): 用户 ID **[必需]**
-  - `uuid` (string): 用户 UUID **[必需]**
-  - `speed_limit` (int): 速率限制 (Mbps)，0 = 不限制 **[可选]**
-  - `device_limit` (int): 设备数限制，0 = 不限制 **[可选]**
-  - `conn_limit` (int): 连接数限制，0 = 不限制 **[可选，v1.2.0+]**
-- 可选支持 `304` 与 `ETag`，以减轻负载。
-- 若没有可用用户，返回空数组即可。
+**Connection Management**
+- Per-user concurrent connection limits
+- Automatic oldest-connection eviction when limit exceeded
+- Separate tracking for TCP and UDP connections
+- Connection creation time tracking for FIFO eviction
 
-**示例响应：**
+**Device Limiting**
+- IP-based device counting
+- Configurable simultaneous device limits
+- IPv4/IPv6 support with IPv6 address normalization
+- Grace period for transient IP changes
+
+### Protocol Support
+
+**Supported Protocols**
+- VLESS (with XTLS support)
+- VMess (with AEAD encryption)
+- Trojan (standard and XTLS variants)
+- Shadowsocks (including 2022 edition)
+
+**Transport Methods**
+- TCP (with HTTP obfuscation)
+- WebSocket (with custom headers)
+- HTTP/2 (gRPC mode)
+- QUIC (experimental)
+- mKCP (with various header types)
+- SplitHTTP (for restrictive networks)
+
+### Security & Privacy
+
+**Certificate Management**
+- Automatic ACME certificate provisioning
+- Support for 50+ DNS providers
+- Certificate auto-renewal
+- Self-signed certificate fallback
+
+**Privacy Features**
+- Reality protocol for TLS fingerprint randomization
+- No persistent user data storage
+- Optional traffic obfuscation
+- Configurable logging levels
+
+## API Specification
+
+### Overview
+
+v2sp communicates with panel backends through a single HTTP/HTTPS endpoint. The API is language-agnostic and follows RESTful principles with JSON payloads.
+
+### Authentication
+
+All requests include the following query parameters:
+
+| Parameter   | Type   | Description                                    |
+|-------------|--------|------------------------------------------------|
+| `action`    | string | API action (config, user, push, alive, etc.)   |
+| `node_id`   | int    | Node identifier                                |
+| `node_type` | string | Protocol type (vless, vmess, trojan, etc.)     |
+| `token`     | string | API key for authentication                     |
+
+**Example Request**
+```
+GET /api/v2sp?action=user&node_id=1&node_type=vless&token=your_api_key
+```
+
+### Response Format
+
+**Success Response** (HTTP 200)
+```json
+{
+  "users": [...]
+}
+```
+
+**Not Modified** (HTTP 304)
+No body, indicates cached data is still valid.
+
+**Error Response** (HTTP 4xx/5xx)
+```json
+{
+  "message": "Descriptive error message"
+}
+```
+
+### Endpoints
+
+#### GET /api?action=config
+
+Retrieves node configuration including protocol settings, TLS certificates, and routing rules.
+
+**Request Headers**
+```
+If-None-Match: "config-etag-value"
+```
+
+**Response** (HTTP 200)
+```json
+{
+  "Log": {
+    "Level": "info",
+    "Output": "/var/log/v2sp/access.log"
+  },
+  "Cores": [
+    {
+      "Type": "xray",
+      "AssetPath": "/etc/v2sp/",
+      "DnsConfigPath": "/etc/v2sp/dns.json",
+      "RouteConfigPath": "/etc/v2sp/route.json"
+    }
+  ],
+  "Nodes": [
+    {
+      "ApiHost": "https://panel.example.com",
+      "ApiKey": "your_api_key",
+      "NodeID": 1,
+      "NodeType": "vless",
+      "Timeout": 30,
+      "ListenIP": "0.0.0.0",
+      "SendIP": "0.0.0.0",
+      "EnableXTLS": true,
+      "CertConfig": {
+        "CertMode": "dns",
+        "CertDomain": "node1.example.com",
+        "Provider": "cloudflare",
+        "Email": "admin@example.com"
+      }
+    }
+  ]
+}
+```
+
+**Response Headers**
+```
+Content-Type: application/json
+ETag: "config-etag-value"
+```
+
+**Caching**: Implement ETag support to minimize unnecessary configuration reloads.
+
+#### GET /api?action=user
+
+Retrieves active user list with associated limits.
+
+**Request Headers**
+```
+If-None-Match: "users-etag-value"
+```
+
+**Response** (HTTP 200)
 ```json
 {
   "users": [
@@ -94,43 +272,88 @@ v2sp 只需要一个 HTTP/HTTPS 入口即可。后端可以使用 PHP、Node.js�
       "speed_limit": 100,
       "device_limit": 3,
       "conn_limit": 50
+    },
+    {
+      "id": 1002,
+      "uuid": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+      "speed_limit": 0,
+      "device_limit": 0,
+      "conn_limit": 0
     }
   ]
 }
 ```
 
-**alivelist**
-- 返回 `{"alive": { "26": 2, "27": 1 }}` 这类键值映射；数值代表该用户允许的同时在线 IP/设备数（通常来自面板记录）。
-- 若暂未统计，可返回空对象 `{ "alive": {} }`。
+**Field Specifications**
 
-**示例响应：**
+| Field         | Type   | Required | Description                                  |
+|---------------|--------|----------|----------------------------------------------|
+| `id`          | int    | Yes      | Unique user identifier                       |
+| `uuid`        | string | Yes      | User UUID (RFC 4122 format)                  |
+| `speed_limit` | int    | No       | Bandwidth limit in Mbps (0 = unlimited)      |
+| `device_limit`| int    | No       | Maximum concurrent devices (0 = unlimited)   |
+| `conn_limit`  | int    | No       | Maximum concurrent connections (0 = unlimited)|
+
+**Notes**:
+- Users with limits set to 0 or omitted fields will have no restrictions
+- User list changes are detected automatically and applied without restart
+- When limits change, existing connections remain active but new connections use updated limits
+
+#### GET /api?action=alivelist
+
+Retrieves current online device counts for device limit enforcement.
+
+**Response** (HTTP 200)
 ```json
 {
   "alive": {
     "1001": 2,
-    "1002": 1
+    "1002": 1,
+    "1003": 0
   }
 }
 ```
 
-**push**
-- 请求体为 `userID: [uploadBytes, downloadBytes]` 的映射，单位为字节，API 需要负责累加到面板数据库。
-- 成功时返回 `{ "message": "ok" }`，失败时可返回 `{ "message": "db error" }` 并使用 `4xx/5xx`。
-- 服务器应保证幂等或合理处理重复上报。
+**Field Specifications**
 
-**示例请求：**
+| Field   | Type   | Description                                           |
+|---------|--------|-------------------------------------------------------|
+| `alive` | object | Map of user IDs to current online device count        |
+
+**Usage**: v2sp compares reported device counts against `device_limit` to enforce restrictions.
+
+#### POST /api?action=push
+
+Reports user traffic consumption for billing and quota enforcement.
+
+**Request Body**
 ```json
 {
-  "1001": [1048576, 2097152],
-  "1002": [524288, 1048576]
+  "1001": [104857600, 209715200],
+  "1002": [52428800, 104857600]
 }
 ```
 
-**alive**
-- 请求体为 `userID: ["ip1","ip2"...]` 的映射，代表当前在线 IP 列表；后端可用来记录实时在线设备。
-- 建议在后台做去重/过期处理，响应同样返回 `{ "message": "ok" }`。
+**Format**: `{ "user_id": [upload_bytes, download_bytes] }`
 
-**示例请求：**
+**Response** (HTTP 200)
+```json
+{
+  "message": "ok"
+}
+```
+
+**Implementation Notes**:
+- Traffic is reported periodically (default: 60 seconds)
+- Implement idempotency to handle duplicate reports
+- Use database transactions to ensure atomic updates
+- Values are in bytes and represent cumulative traffic since last report
+
+#### POST /api?action=alive
+
+Reports currently online user IPs for real-time monitoring and device tracking.
+
+**Request Body**
 ```json
 {
   "1001": ["1.2.3.4", "5.6.7.8"],
@@ -138,21 +361,495 @@ v2sp 只需要一个 HTTP/HTTPS 入口即可。后端可以使用 PHP、Node.js�
 }
 ```
 
-### API 开发检查清单
+**Format**: `{ "user_id": ["ip1", "ip2", ...] }`
 
-实现面板 API 时，请确保：
-- 所有响应使用 `Content-Type: application/json`
-- 正确的 JSON 编码（使用 `json_encode`、`JSON.stringify` 等标准方法）
-- HTTP 状态码正确（200 成功，304 未修改，4xx/5xx 错误）
-- 错误时返回 `{ "message": "错误原因" }`
-- 字段类型正确（id 是 int，uuid 是 string 等）
-- 字段名使用下划线命名（`speed_limit`，不是 `speedLimit`）
+**Response** (HTTP 200)
+```json
+{
+  "message": "ok"
+}
+```
 
-只要遵循以上 JSON 规范即可，语言和框架不限。
+**Implementation Notes**:
+- Reported every 60 seconds by default
+- IPs are deduplicated on backend
+- Implement expiry mechanism (recommend 5-minute TTL)
+- Supports both IPv4 and IPv6 addresses
+
+### Error Handling
+
+**Common Error Codes**
+
+| Status | Meaning                | Action                                        |
+|--------|------------------------|-----------------------------------------------|
+| 400    | Bad Request            | Check request format and parameters           |
+| 401    | Unauthorized           | Verify API token                              |
+| 403    | Forbidden              | Node may be disabled                          |
+| 404    | Not Found              | Node ID doesn't exist                         |
+| 500    | Internal Server Error  | Check panel logs                              |
+| 502    | Bad Gateway            | Panel backend is down                         |
+| 503    | Service Unavailable    | Panel is under maintenance                    |
+
+**Error Response Format**
+```json
+{
+  "message": "Detailed error description",
+  "code": "ERROR_CODE",
+  "details": {}
+}
+```
+
+### API Implementation Checklist
+
+When implementing panel API endpoints, ensure:
+
+**Response Format**
+- [ ] Content-Type header set to `application/json`
+- [ ] Character encoding is UTF-8
+- [ ] JSON is properly formatted (use `json_encode()`, `JSON.stringify()`, etc.)
+- [ ] Field names use snake_case (not camelCase)
+
+**HTTP Semantics**
+- [ ] Correct status codes (200, 304, 4xx, 5xx)
+- [ ] ETag support for caching (recommended)
+- [ ] If-None-Match request header handling
+- [ ] Proper error messages in response body
+
+**Data Validation**
+- [ ] Type safety (id as int, uuid as string, etc.)
+- [ ] UUID format validation (RFC 4122)
+- [ ] Limit values are non-negative integers
+- [ ] Required fields are always present
+
+**Security**
+- [ ] API token validation on every request
+- [ ] Rate limiting to prevent abuse
+- [ ] SQL injection prevention
+- [ ] Input sanitization
+
+**Performance**
+- [ ] Database query optimization
+- [ ] Connection pooling
+- [ ] Response caching where appropriate
+- [ ] Efficient JSON encoding
+
+## Configuration
+
+### Core Configuration
+
+The main configuration file (`config.json`) defines logging, core settings, and node configurations.
+
+**Example Configuration**
+```json
+{
+  "Log": {
+    "Level": "info",
+    "Output": "/var/log/v2sp/v2sp.log"
+  },
+  "Cores": [
+    {
+      "Type": "xray",
+      "Log": {
+        "Level": "warning"
+      },
+      "AssetPath": "/etc/v2sp/",
+      "DnsConfigPath": "/etc/v2sp/dns.json",
+      "RouteConfigPath": "/etc/v2sp/route.json"
+    }
+  ],
+  "Nodes": [
+    {
+      "Core": "xray",
+      "ApiHost": "https://panel.example.com",
+      "ApiKey": "your_secure_api_key",
+      "NodeID": 1,
+      "NodeType": "vless",
+      "Timeout": 30,
+      "ListenIP": "0.0.0.0",
+      "SendIP": "0.0.0.0",
+      "DeviceOnlineMinTraffic": 200,
+      "EnableXTLS": true,
+      "EnableVless": true,
+      "CertConfig": {
+        "CertMode": "dns",
+        "CertDomain": "node1.example.com",
+        "Provider": "cloudflare",
+        "Email": "admin@example.com",
+        "DNSEnv": {
+          "CF_DNS_API_TOKEN": "your_cloudflare_token"
+        }
+      },
+      "LimitConfig": {
+        "EnableDynamicSpeedLimit": false,
+        "SpeedLimit": 0,
+        "DeviceLimit": 0,
+        "ConnLimit": 0
+      }
+    }
+  ]
+}
+```
+
+### Configuration Reference
+
+**Log Options**
+
+| Field    | Type   | Default | Description                                |
+|----------|--------|---------|------------------------------------------|
+| `Level`  | string | `info`  | Log level: debug, info, warning, error   |
+| `Output` | string | stdout  | Log file path or empty for stdout        |
+
+**Node Options**
+
+| Field                      | Type    | Required | Description                                    |
+|----------------------------|---------|----------|------------------------------------------------|
+| `Core`                     | string  | No       | Core type, defaults to "xray"                  |
+| `ApiHost`                  | string  | Yes      | Panel API base URL                             |
+| `ApiKey`                   | string  | Yes      | API authentication token                       |
+| `NodeID`                   | int     | Yes      | Unique node identifier                         |
+| `NodeType`                 | string  | Yes      | Protocol: vless, vmess, trojan, shadowsocks    |
+| `Timeout`                  | int     | No       | API request timeout in seconds (default: 30)   |
+| `ListenIP`                 | string  | No       | Listening address (default: 0.0.0.0)           |
+| `SendIP`                   | string  | No       | Outbound source IP (default: 0.0.0.0)          |
+| `DeviceOnlineMinTraffic`   | int     | No       | Minimum traffic (KB) to count as online        |
+| `EnableXTLS`               | bool    | No       | Enable XTLS support                            |
+| `EnableVless`              | bool    | No       | Enable VLESS protocol                          |
+
+**Certificate Configuration**
+
+| Field        | Type   | Description                                        |
+|--------------|--------|----------------------------------------------------|
+| `CertMode`   | string | Certificate mode: none, file, http, dns, self      |
+| `CertDomain` | string | Domain name for certificate                        |
+| `CertFile`   | string | Path to certificate file (file mode)               |
+| `KeyFile`    | string | Path to private key file (file mode)               |
+| `Provider`   | string | DNS provider name (dns mode)                       |
+| `Email`      | string | ACME account email                                 |
+| `DNSEnv`     | object | DNS provider credentials                           |
+
+**Limit Configuration**
+
+| Field                      | Type | Description                                     |
+|----------------------------|------|-------------------------------------------------|
+| `EnableDynamicSpeedLimit`  | bool | Enable dynamic speed adjustment                 |
+| `SpeedLimit`               | int  | Node-level speed limit in Mbps (0 = unlimited)  |
+| `DeviceLimit`              | int  | Node-level device limit (0 = unlimited)         |
+| `ConnLimit`                | int  | Node-level connection limit (0 = unlimited)     |
+
+### DNS Configuration
+
+Custom DNS rules can be defined in `dns.json`:
+
+```json
+{
+  "servers": [
+    {
+      "address": "223.5.5.5",
+      "domains": ["geosite:cn"]
+    },
+    {
+      "address": "8.8.8.8",
+      "domains": ["geosite:geolocation-!cn"]
+    }
+  ]
+}
+```
+
+### Routing Configuration
+
+Traffic routing rules can be defined in `route.json`:
+
+```json
+{
+  "domainStrategy": "IPIfNonMatch",
+  "rules": [
+    {
+      "type": "field",
+      "domain": ["geosite:cn"],
+      "outboundTag": "direct"
+    },
+    {
+      "type": "field",
+      "ip": ["geoip:cn", "geoip:private"],
+      "outboundTag": "direct"
+    }
+  ]
+}
+```
+
+## Building from Source
+
+### Prerequisites
+
+- Go 1.21 or later
+- Git
+- Make (optional)
+
+### Build Commands
+
+**Local Build**
+```bash
+go build -trimpath -ldflags "-s -w" -o v2sp
+```
+
+**Cross-Compilation**
+
+Linux AMD64 (most common for servers):
+```bash
+GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid=" -o v2sp-linux-amd64
+```
+
+Linux ARM64 (ARM-based servers):
+```bash
+GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -buildid=" -o v2sp-linux-arm64
+```
+
+**Build Flags Explained**
+
+- `-trimpath`: Remove file system paths from binary for reproducible builds
+- `-ldflags "-s -w"`: Strip debugging information to reduce binary size
+- `-buildid=""`: Remove build ID for reproducible builds
+
+### Release Process
+
+Create a new release using the provided script:
+
+```bash
+./scripts/release.sh v1.0.0 "Release description"
+```
+
+The script performs the following:
+1. Validates working directory is clean
+2. Pushes latest changes to main branch
+3. Creates and pushes Git tag
+4. Triggers GitHub Actions workflow for automated builds
+5. Optionally creates GitHub Release (requires `gh` CLI)
+
+## Deployment
+
+### Systemd Service
+
+v2sp includes a systemd service file for production deployments:
+
+```ini
+[Unit]
+Description=v2sp Multi-Node Backend
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/usr/local/bin/v2sp run -c /etc/v2sp/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10s
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Service Management**
+```bash
+systemctl enable v2sp
+systemctl start v2sp
+systemctl status v2sp
+systemctl reload v2sp  # Reload configuration without downtime
+```
+
+### Docker Deployment
+
+**Dockerfile**
+```dockerfile
+FROM golang:1.21-alpine AS builder
+WORKDIR /build
+COPY . .
+RUN go build -trimpath -ldflags "-s -w" -o v2sp
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+COPY --from=builder /build/v2sp /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/v2sp"]
+CMD ["run", "-c", "/etc/v2sp/config.json"]
+```
+
+**Docker Compose**
+```yaml
+version: '3.8'
+services:
+  v2sp:
+    image: ghcr.io/nsevo/v2sp:latest
+    container_name: v2sp
+    restart: unless-stopped
+    volumes:
+      - ./config:/etc/v2sp
+      - ./logs:/var/log/v2sp
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+```
+
+### Production Considerations
+
+**Security**
+- Run as non-privileged user
+- Use firewall rules to restrict access
+- Keep API keys secure and rotate regularly
+- Enable TLS for panel API communication
+- Regularly update to latest stable version
+
+**Performance**
+- Allocate sufficient file descriptors (`LimitNOFILE`)
+- Monitor memory usage and set appropriate limits
+- Use SSD storage for high-traffic nodes
+- Consider using CDN for certificate provisioning
+- Enable kernel TCP optimizations
+
+**Monitoring**
+- Set up log aggregation (e.g., ELK, Loki)
+- Monitor system metrics (CPU, memory, network)
+- Track traffic anomalies
+- Set up alerting for service failures
+- Regular backup of configuration files
+
+## Development
+
+### Project Structure
+
+```
+v2sp/
+├── api/            # Panel API client implementation
+├── cmd/            # CLI commands and entry point
+├── common/         # Shared utilities (crypto, task, format)
+├── conf/           # Configuration structures and validation
+├── core/           # Xray core integration
+│   └── xray/       # Xray-specific implementation
+│       └── app/    # Custom dispatcher and components
+├── limiter/        # Rate limiting and connection management
+├── node/           # Node controller and lifecycle management
+└── example/        # Example configuration files
+```
+
+### Code Architecture
+
+**Dependency Flow**
+```
+main.go
+  ↓
+cmd/
+  ↓
+node/Controller
+  ├→ api/Client (panel communication)
+  ├→ core/Xray (protocol handling)
+  ├→ limiter/Limiter (rate/device/connection limits)
+  └→ common/Counter (traffic accounting)
+```
+
+### Contributing
+
+Contributions are welcome. Please follow these guidelines:
+
+**Code Style**
+- Follow Go standard formatting (`gofmt`)
+- Use meaningful variable and function names
+- Add comments for exported functions
+- Keep functions focused and testable
+
+**Pull Request Process**
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes with clear commit messages
+4. Ensure all tests pass
+5. Update documentation if needed
+6. Submit pull request with detailed description
+
+**Testing**
+```bash
+# Run unit tests
+go test ./...
+
+# Run tests with coverage
+go test -cover ./...
+
+# Run tests with race detector
+go test -race ./...
+```
+
+## Troubleshooting
+
+### Common Issues
+
+**Problem**: Connection refused when connecting to panel API
+
+**Solution**: 
+- Verify `ApiHost` is correct and accessible
+- Check firewall rules
+- Ensure panel API is running
+- Verify API token is valid
+
+**Problem**: Users not showing up in node
+
+**Solution**:
+- Check API response format matches specification
+- Verify user list endpoint returns correct JSON
+- Check v2sp logs for API errors
+- Ensure user UUIDs are valid RFC 4122 format
+
+**Problem**: Speed limit not working
+
+**Solution**:
+- Verify `speed_limit` values are in Mbps (not Bps)
+- Check if node-level speed limit overrides user limits
+- Ensure rate limiting is enabled in configuration
+- Monitor system resources (CPU/memory)
+
+**Problem**: Certificate renewal fails
+
+**Solution**:
+- Verify DNS provider credentials are correct
+- Check domain ownership
+- Ensure port 80/443 are accessible (http mode)
+- Review ACME account status
+
+### Debug Mode
+
+Enable detailed logging for troubleshooting:
+
+```json
+{
+  "Log": {
+    "Level": "debug",
+    "Output": "/var/log/v2sp/debug.log"
+  }
+}
+```
 
 ## Credits
 
-项目基于社区多款核心演进，特别感谢：
-[XTLS](https://github.com/XTLS/) · [V2Fly](https://github.com/v2fly) · [XrayR](https://github.com/XrayR/XrayR) · [SagerNet/sing-box](https://github.com/SagerNet/sing-box) · [V2bX 项目](https://github.com/wyx2685/V2bX)
+v2sp is built upon the excellent work of the following projects:
 
-Star 走势可在 [starchart](https://starchart.cc/nsevo/v2sp) 查看。
+**Core Projects**
+- [XTLS/Xray-core](https://github.com/XTLS/Xray-core) - High-performance proxy platform
+- [v2fly/v2ray-core](https://github.com/v2fly/v2ray-core) - Platform for building proxies
+
+**Inspiration & Reference**
+- [XrayR](https://github.com/XrayR-project/XrayR) - Xray backend for V2board and other panels
+- [V2bX](https://github.com/wyx2685/V2bX) - Multi-protocol backend implementation
+- [SagerNet/sing-box](https://github.com/SagerNet/sing-box) - Universal proxy platform
+
+**Infrastructure**
+- [go-acme/lego](https://github.com/go-acme/lego) - ACME client library
+- [spf13/cobra](https://github.com/spf13/cobra) - CLI framework
+- [sirupsen/logrus](https://github.com/sirupsen/logrus) - Structured logging
+
+Special thanks to all contributors and users who have provided feedback, bug reports, and feature suggestions.
+
+## License
+
+This project is provided as-is for educational and self-hosting purposes. Please review and comply with local regulations regarding proxy services.
+
+## Links
+
+- Documentation: [GitHub Wiki](https://github.com/nsevo/v2sp/wiki)
+- Issue Tracker: [GitHub Issues](https://github.com/nsevo/v2sp/issues)
+- Star History: [Star Chart](https://starchart.cc/nsevo/v2sp)
