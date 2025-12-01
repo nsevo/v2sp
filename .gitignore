@@ -16,3 +16,19 @@ output/*
 .idea/*
 newv2sp.sh
 .DS_Store
+
+# Build artifacts - 编译产物
+v2sp
+v2sp-*
+*.exe
+*.dll
+*.so
+*.dylib
+dist/
+build/
+
+# Test files - 测试文件
+*.test
+*.out
+test_*.txt
+coverage.out

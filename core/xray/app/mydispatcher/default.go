@@ -202,10 +202,24 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			d.LinkManagers.Store(user.Email, lm)
 		} else {
 			lm = lmloaded.(*LinkManager)
+			// Check connection limit and replace oldest if needed
+			if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
+				userLimit := v.(*limiter.UserLimitInfo)
+				if userLimit.ConnLimit > 0 {
+					currentConns := lm.GetConnectionCount()
+					if currentConns >= userLimit.ConnLimit {
+						// Remove the oldest connection to make room for the new one
+						if lm.RemoveOldest() {
+							errors.LogInfo(ctx, "Replaced oldest connection for ", user.Email, " (limit: ", userLimit.ConnLimit, ")")
+						}
+					}
+				}
+			}
 		}
 		managedWriter := &ManagedWriter{
-			writer:  uplinkWriter,
-			manager: lm,
+			writer:     uplinkWriter,
+			manager:    lm,
+			createTime: time.Now(),
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader)
 		inboundLink.Writer = managedWriter
@@ -396,10 +410,24 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			d.LinkManagers.Store(user.Email, lm)
 		} else {
 			lm = lmloaded.(*LinkManager)
+			// Check connection limit and replace oldest if needed
+			if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
+				userLimit := v.(*limiter.UserLimitInfo)
+				if userLimit.ConnLimit > 0 {
+					currentConns := lm.GetConnectionCount()
+					if currentConns >= userLimit.ConnLimit {
+						// Remove the oldest connection to make room for the new one
+						if lm.RemoveOldest() {
+							errors.LogInfo(ctx, "Replaced oldest connection for ", user.Email, " (limit: ", userLimit.ConnLimit, ")")
+						}
+					}
+				}
+			}
 		}
 		managedWriter := &ManagedWriter{
-			writer:  outbound.Writer,
-			manager: lm,
+			writer:     outbound.Writer,
+			manager:    lm,
+			createTime: time.Now(),
 		}
 		outbound.Writer = managedWriter
 		if w != nil {

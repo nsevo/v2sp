@@ -36,6 +36,7 @@ type UserLimitInfo struct {
 	UID               int
 	SpeedLimit        int
 	DeviceLimit       int
+	ConnLimit         int
 	DynamicSpeedLimit int
 	ExpireTime        int64
 	OverLimit         bool
@@ -60,6 +61,9 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 		}
 		if users[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = users[i].DeviceLimit
+		}
+		if users[i].ConnLimit != 0 {
+			userLimit.ConnLimit = users[i].ConnLimit
 		}
 		userLimit.OverLimit = false
 		info.UserLimitInfo.Store(format.UserTag(tag, users[i].Uuid), userLimit)
@@ -105,6 +109,9 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		}
 		if added[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = added[i].DeviceLimit
+		}
+		if added[i].ConnLimit != 0 {
+			userLimit.ConnLimit = added[i].ConnLimit
 		}
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
