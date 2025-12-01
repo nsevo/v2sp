@@ -48,38 +48,38 @@ func New(c *conf.ApiConfig) (*Client, error) {
 	client.OnError(func(req *resty.Request, err error) {
 		var v *resty.ResponseError
 		if errors.As(err, &v) {
-			// v.Response contains the last response from the server
-			// v.Err contains the original error
 			logrus.Error(v.Err)
 		}
 	})
 	client.SetBaseURL(c.APIHost)
-	// Check node type
-	c.NodeType = strings.ToLower(c.NodeType)
-	switch c.NodeType {
+
+	// Normalize node type (can be empty, will be auto-detected from API)
+	nodeType := strings.ToLower(c.NodeType)
+	switch nodeType {
 	case "v2ray":
-		c.NodeType = "vmess"
-	case
-		"vmess",
-		"trojan",
-		"shadowsocks",
-		"vless",
-		"hysteria":
+		nodeType = "vmess"
+	case "", "vmess", "trojan", "shadowsocks", "vless", "hysteria":
+		// empty is allowed - will be auto-detected from API
 	default:
 		return nil, fmt.Errorf("unsupported Node type: %s", c.NodeType)
 	}
-	// set params
-	client.SetQueryParams(map[string]string{
-		"node_type": c.NodeType,
-		"node_id":   strconv.Itoa(c.NodeID),
-		"token":     c.Key,
-	})
+
+	// Set query params - node_type is optional
+	params := map[string]string{
+		"node_id": strconv.Itoa(c.NodeID),
+		"token":   c.Key,
+	}
+	if nodeType != "" {
+		params["node_type"] = nodeType
+	}
+	client.SetQueryParams(params)
+
 	return &Client{
 		client:    client,
 		Token:     c.Key,
 		APIHost:   c.APIHost,
 		APISendIP: c.APISendIP,
-		NodeType:  c.NodeType,
+		NodeType:  nodeType, // may be empty, will be set after first API call
 		NodeId:    c.NodeID,
 		UserList:  &UserListBody{},
 		AliveMap:  &AliveMap{},

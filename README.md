@@ -507,7 +507,7 @@ The main configuration file (`config.json`) defines logging, core settings, and 
 | `ApiHost`                  | string  | Yes      | Panel API base URL                             |
 | `ApiKey`                   | string  | Yes      | API authentication token                       |
 | `NodeID`                   | int     | Yes      | Unique node identifier                         |
-| `NodeType`                 | string  | Yes      | Protocol: vless, vmess, trojan, shadowsocks    |
+| `NodeType`                 | string  | No       | Protocol (auto-detected from API if omitted)   |
 | `Timeout`                  | int     | No       | API request timeout in seconds (default: 30)   |
 | `ListenIP`                 | string  | No       | Listening address (default: 0.0.0.0)           |
 | `SendIP`                   | string  | No       | Outbound source IP (default: 0.0.0.0)          |

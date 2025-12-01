@@ -171,9 +171,26 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	} else {
 		return nil, fmt.Errorf("received nil response")
 	}
+
+	// Auto-detect node_type from API response if not set
+	nodeType := c.NodeType
+	if nodeType == "" {
+		var typeDetect struct {
+			NodeType string `json:"node_type"`
+		}
+		if err = json.Unmarshal(r.Body(), &typeDetect); err != nil {
+			return nil, fmt.Errorf("failed to detect node_type: %s", err)
+		}
+		nodeType = strings.ToLower(typeDetect.NodeType)
+		if nodeType == "" {
+			return nil, fmt.Errorf("node_type not found in API response")
+		}
+		c.NodeType = nodeType // Update client's NodeType for future requests
+	}
+
 	node = &NodeInfo{
 		Id:   c.NodeId,
-		Type: c.NodeType,
+		Type: nodeType,
 		RawDNS: RawDNS{
 			DNSMap:  make(map[string]map[string]interface{}),
 			DNSJson: []byte(""),
@@ -181,7 +198,7 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	}
 	// parse protocol params
 	var cm *CommonNode
-	switch c.NodeType {
+	switch nodeType {
 	case "vmess", "vless":
 		rsp := &VAllssNode{}
 		err = json.Unmarshal(r.Body(), rsp)
