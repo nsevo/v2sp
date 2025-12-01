@@ -14,68 +14,18 @@ jobs:
   build:
     strategy:
       matrix:
-        # Include amd64 on all platforms.
-        goos: [windows, freebsd, linux, darwin]
-        goarch: [amd64, 386]
-        exclude:
-          # Exclude i386 on darwin.
-          - goarch: 386
-            goos: darwin
-        include:
-          # BEIGIN MacOS ARM64
-          - goos: darwin
-            goarch: arm64
-          # END MacOS ARM64
-          # BEGIN Linux ARM 5 6 7
-          - goos: linux
-            goarch: arm
-            goarm: 7
-          - goos: linux
-            goarch: arm
-            goarm: 6
-          - goos: linux
-            goarch: arm
-            goarm: 5
-          # END Linux ARM 5 6 7
-          # BEGIN Android ARM 8
-          - goos: android
-            goarch: arm64
-          # END Android ARM 8
-          # BEGIN Other architectures
-          # BEGIN riscv64 & ARM64
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: riscv64
-          # END riscv64 & ARM64
-          # BEGIN MIPS
-          - goos: linux
-            goarch: mips64
-          - goos: linux
-            goarch: mips64le
-          - goos: linux
-            goarch: mipsle
-          - goos: linux
-            goarch: mips
-          # END MIPS
-          # BEGIN PPC
-          - goos: linux
-            goarch: ppc64
-          - goos: linux
-            goarch: ppc64le
-          # END PPC
-          # BEGIN FreeBSD ARM
-          - goos: freebsd
-            goarch: arm64
-          - goos: freebsd
-            goarch: arm
-            goarm: 7
-          # END FreeBSD ARM
-          # BEGIN S390X
-          - goos: linux
-            goarch: s390x
-          # END S390X
-          # END Other architectures
+        # 构建 Linux 服务器常用版本
+        goos: [linux]
+        goarch: [amd64, arm64]
+        # 如需其他架构，取消下方注释：
+        # include:
+          # Linux 386 (老旧服务器)
+          # - goos: linux
+          #   goarch: 386
+          # Linux ARM7 (32位ARM，如树莓派)
+          # - goos: linux
+          #   goarch: arm
+          #   goarm: 7
       fail-fast: false
 
     runs-on: ubuntu-latest
@@ -118,18 +68,7 @@ jobs:
         run: |
           echo "version: $version"
           mkdir -p build_assets
-          GOEXPERIMENT=jsonv2 go build -v -o build_assets/v2sp -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/nsevo/v2sp/cmd.version=$version' -s -w -buildid="
-
-      - name: Build Mips softfloat v2sp
-        if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
-        run: |
-          echo "version: $version"
-          GOEXPERIMENT=jsonv2 GOMIPS=softfloat go build -v -o build_assets/v2sp_softfloat -tags "sing xray hysteria2 with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/nsevo/v2sp/cmd.version=$version' -s -w -buildid="
-      - name: Rename Windows binary
-        if: matrix.goos == 'windows'
-        run: |
-          cd ./build_assets || exit 1
-          mv v2sp v2sp.exe
+          go build -v -o build_assets/v2sp -trimpath -ldflags "-X 'github.com/nsevo/v2sp/cmd.version=$version' -s -w -buildid="
       - name: Prepare to release
         run: |
           cp ${GITHUB_WORKSPACE}/README.md ./build_assets/README.md
