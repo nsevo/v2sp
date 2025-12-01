@@ -2,6 +2,7 @@ package conf
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 type CoreConfig struct {
@@ -17,10 +18,11 @@ func (c *CoreConfig) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	switch c.Type {
-	case "xray":
-		c.XrayConfig = NewXrayConfig()
-		return json.Unmarshal(b, c.XrayConfig)
+	// Only xray core is supported
+	if c.Type != "xray" && c.Type != "" {
+		return fmt.Errorf("unsupported core type: %s (only 'xray' is supported)", c.Type)
 	}
-	return nil
+	c.Type = "xray"
+	c.XrayConfig = NewXrayConfig()
+	return json.Unmarshal(b, c.XrayConfig)
 }

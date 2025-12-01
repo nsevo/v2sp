@@ -2,7 +2,6 @@ package core
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -89,14 +88,7 @@ func (s *Selector) AddNode(tag string, info *panel.NodeInfo, option *conf.Option
 	if core == nil {
 		return errors.New("the node type is not support")
 	}
-	if len(option.Core) == 0 {
-		option.Core = core.Type()
-		err := option.UnmarshalJSON(option.RawOptions)
-		if err != nil {
-			return fmt.Errorf("unmarshal option error: %s", err)
-		}
-		option.RawOptions = nil
-	}
+	// Core type is always set to "xray" in Options.UnmarshalJSON
 	err := core.AddNode(tag, info, option)
 	if err != nil {
 		return err

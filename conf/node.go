@@ -105,17 +105,16 @@ func (n *NodeConfig) UnmarshalJSON(data []byte) (err error) {
 }
 
 type Options struct {
-	Name                   string          `json:"Name"`
-	Core                   string          `json:"Core"`
-	CoreName               string          `json:"CoreName"`
-	ListenIP               string          `json:"ListenIP"`
-	SendIP                 string          `json:"SendIP"`
-	DeviceOnlineMinTraffic int64           `json:"DeviceOnlineMinTraffic"`
-	ReportMinTraffic       int64           `json:"ReportMinTraffic"`
-	LimitConfig            LimitConfig     `json:"LimitConfig"`
-	RawOptions             json.RawMessage `json:"RawOptions"`
-	XrayOptions            *XrayOptions    `json:"XrayOptions"`
-	CertConfig             *CertConfig     `json:"CertConfig"`
+	Name                   string       `json:"Name"`
+	Core                   string       `json:"Core"`
+	CoreName               string       `json:"CoreName"`
+	ListenIP               string       `json:"ListenIP"`
+	SendIP                 string       `json:"SendIP"`
+	DeviceOnlineMinTraffic int64        `json:"DeviceOnlineMinTraffic"`
+	ReportMinTraffic       int64        `json:"ReportMinTraffic"`
+	LimitConfig            LimitConfig  `json:"LimitConfig"`
+	XrayOptions            *XrayOptions `json:"XrayOptions"`
+	CertConfig             *CertConfig  `json:"CertConfig"`
 }
 
 func (o *Options) UnmarshalJSON(data []byte) error {
@@ -124,13 +123,13 @@ func (o *Options) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	switch o.Core {
-	case "xray":
-		o.XrayOptions = NewXrayOptions()
-		return json.Unmarshal(data, o.XrayOptions)
-	default:
-		o.Core = ""
-		o.RawOptions = data
+	// Only xray core is supported, set default if empty
+	if o.Core == "" {
+		o.Core = "xray"
 	}
-	return nil
+	if o.Core != "xray" {
+		return fmt.Errorf("unsupported core type: %s (only 'xray' is supported)", o.Core)
+	}
+	o.XrayOptions = NewXrayOptions()
+	return json.Unmarshal(data, o.XrayOptions)
 }

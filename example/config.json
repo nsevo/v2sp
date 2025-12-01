@@ -16,7 +16,6 @@
   ],
   "Nodes": [
     {
-      "Core": "xray",
       "ApiHost": "http://127.0.0.1",
       "ApiKey": "test",
       "NodeID": 1,
