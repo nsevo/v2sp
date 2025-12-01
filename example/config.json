@@ -5,43 +5,33 @@
   },
   "Cores": [
     {
-      "Type": "sing",
+      "Type": "xray",
       "Log": {
-        "Level": "info",
-        "Timestamp": true
+        "Level": "info"
       },
-      "NTP": {
-        "Enable": false,
-        "Server": "time.apple.com",
-        "ServerPort": 0
-      },
-      "OriginalPath": "/etc/v2sp/sing_origin.json"
+      "AssetPath": "/etc/v2sp/",
+      "DnsConfigPath": "/etc/v2sp/dns.json",
+      "RouteConfigPath": "/etc/v2sp/route.json"
     }
   ],
   "Nodes": [
     {
-      "Core": "sing",
+      "Core": "xray",
       "ApiHost": "http://127.0.0.1",
       "ApiKey": "test",
-      "NodeID": 33,
-      "NodeType": "shadowsocks",
+      "NodeID": 1,
+      "NodeType": "vless",
       "Timeout": 30,
       "ListenIP": "0.0.0.0",
       "SendIP": "0.0.0.0",
       "DeviceOnlineMinTraffic": 200,
-      "MinReportTraffic": 0,
-      "TCPFastOpen": false,
-      "SniffEnabled": true,
+      "EnableXTLS": true,
+      "EnableVless": true,
       "CertConfig": {
-        "CertMode": "self",
-        "RejectUnknownSni": false,
+        "CertMode": "file",
         "CertDomain": "example.com",
         "CertFile": "/etc/v2sp/fullchain.cer",
-        "KeyFile": "/etc/v2sp/cert.key",
-        "Provider": "cloudflare",
-        "DNSEnv": {
-          "EnvName": "env1"
-        }
+        "KeyFile": "/etc/v2sp/cert.key"
       }
     }
   ]

@@ -1,15 +1,14 @@
 package xray
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
 
-	"encoding/json/v2"
-
 	"github.com/nsevo/v2sp/conf"
 	vCore "github.com/nsevo/v2sp/core"
-	"github.com/nsevo/v2sp/core/xray/app/dispatcher"
+	"github.com/nsevo/v2sp/core/xray/app/mydispatcher"
 	_ "github.com/nsevo/v2sp/core/xray/distro/all"
 	log "github.com/sirupsen/logrus"
 	"github.com/xtls/xray-core/app/proxyman"
@@ -36,7 +35,7 @@ type Xray struct {
 	ihm                       inbound.Manager
 	ohm                       outbound.Manager
 	shm                       statsFeature.Manager
-	dispatcher                *dispatcher.DefaultDispatcher
+	dispatcher                *mydispatcher.DefaultDispatcher
 	users                     *UserMap
 	nodeReportMinTrafficBytes map[string]int64
 }
@@ -162,7 +161,7 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 	config := &core.Config{
 		App: []*serial.TypedMessage{
 			serial.ToTypedMessage(coreLogConfig.Build()),
-			serial.ToTypedMessage(&dispatcher.Config{}),
+			serial.ToTypedMessage(&mydispatcher.Config{}),
 			serial.ToTypedMessage(&stats.Config{}),
 			serial.ToTypedMessage(&proxyman.InboundConfig{}),
 			serial.ToTypedMessage(&proxyman.OutboundConfig{}),
@@ -191,7 +190,7 @@ func (c *Xray) Start() error {
 	c.shm = c.Server.GetFeature(statsFeature.ManagerType()).(statsFeature.Manager)
 	c.ihm = c.Server.GetFeature(inbound.ManagerType()).(inbound.Manager)
 	c.ohm = c.Server.GetFeature(outbound.ManagerType()).(outbound.Manager)
-	c.dispatcher = c.Server.GetFeature(routing.DispatcherType()).(*dispatcher.DefaultDispatcher)
+	c.dispatcher = c.Server.GetFeature(routing.DispatcherType()).(*mydispatcher.DefaultDispatcher)
 	return nil
 }
 

@@ -1,13 +1,12 @@
 package conf
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 
 	"github.com/nsevo/v2sp/common/json5"
-
-	"encoding/json/v2"
 )
 
 type Conf struct {

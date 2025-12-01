@@ -8,7 +8,7 @@ import (
 	"github.com/nsevo/v2sp/common/counter"
 	"github.com/nsevo/v2sp/common/format"
 	vCore "github.com/nsevo/v2sp/core"
-	"github.com/nsevo/v2sp/core/xray/app/dispatcher"
+	"github.com/nsevo/v2sp/core/xray/app/mydispatcher"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/proxy"
 )
@@ -49,7 +49,7 @@ func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) e
 			tc.Delete(user)
 		}
 		if v, ok := c.dispatcher.LinkManagers.Load(user); ok {
-			lm := v.(*dispatcher.LinkManager)
+			lm := v.(*mydispatcher.LinkManager)
 			lm.CloseAll()
 			c.dispatcher.LinkManagers.Delete(user)
 		}

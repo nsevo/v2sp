@@ -3,7 +3,7 @@ package cmd
 import (
 	log "github.com/sirupsen/logrus"
 
-	_ "github.com/nsevo/v2sp/core/imports"
+	_ "github.com/nsevo/v2sp/core/xray"
 	"github.com/spf13/cobra"
 )
 
