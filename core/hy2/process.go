@@ -208,15 +208,25 @@ func (w *logWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// CheckBinaryExists checks if the Hysteria2 binary exists
+// CheckBinaryExists checks if the Hysteria2 binary exists at default path
 func CheckBinaryExists() bool {
-	_, err := os.Stat(DefaultHy2Binary)
+	return CheckBinaryExistsAt(DefaultHy2Binary)
+}
+
+// CheckBinaryExistsAt checks if the Hysteria2 binary exists at specified path
+func CheckBinaryExistsAt(path string) bool {
+	_, err := os.Stat(path)
 	return err == nil
 }
 
-// GetBinaryVersion returns the version of the Hysteria2 binary
+// GetBinaryVersion returns the version of the Hysteria2 binary at default path
 func GetBinaryVersion() (string, error) {
-	cmd := exec.Command(DefaultHy2Binary, "version")
+	return GetBinaryVersionAt(DefaultHy2Binary)
+}
+
+// GetBinaryVersionAt returns the version of the Hysteria2 binary at specified path
+func GetBinaryVersionAt(path string) (string, error) {
+	cmd := exec.Command(path, "version")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

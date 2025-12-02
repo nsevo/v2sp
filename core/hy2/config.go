@@ -12,11 +12,13 @@ import (
 
 // Hy2ServerConfig represents Hysteria2 server configuration
 type Hy2ServerConfig struct {
-	Listen string          `yaml:"listen"`
-	TLS    *Hy2TLSConfig   `yaml:"tls,omitempty"`
-	Auth   *Hy2AuthConfig  `yaml:"auth"`
-	Masq   *Hy2MasqConfig  `yaml:"masquerade,omitempty"`
-	Stats  *Hy2StatsConfig `yaml:"trafficStats,omitempty"`
+	Listen    string          `yaml:"listen"`
+	TLS       *Hy2TLSConfig   `yaml:"tls,omitempty"`
+	Auth      *Hy2AuthConfig  `yaml:"auth"`
+	Masq      *Hy2MasqConfig  `yaml:"masquerade,omitempty"`
+	Stats     *Hy2StatsConfig `yaml:"trafficStats,omitempty"`
+	Outbounds []Hy2Outbound   `yaml:"outbounds,omitempty"`
+	ACL       *Hy2ACLConfig   `yaml:"acl,omitempty"`
 }
 
 // Hy2TLSConfig represents TLS configuration
@@ -49,6 +51,24 @@ type Hy2MasqConfig struct {
 type Hy2StatsConfig struct {
 	Listen string `yaml:"listen"`
 	Secret string `yaml:"secret,omitempty"`
+}
+
+// Hy2Outbound represents an outbound configuration
+type Hy2Outbound struct {
+	Name   string           `yaml:"name"`
+	Type   string           `yaml:"type"`
+	Direct *Hy2DirectConfig `yaml:"direct,omitempty"`
+}
+
+// Hy2DirectConfig represents direct outbound configuration
+type Hy2DirectConfig struct {
+	Mode string `yaml:"mode,omitempty"` // auto, 4, 6, 46, 64
+}
+
+// Hy2ACLConfig represents ACL configuration
+type Hy2ACLConfig struct {
+	Inline []string `yaml:"inline,omitempty"`
+	File   string   `yaml:"file,omitempty"`
 }
 
 // ConfigGenerator generates Hysteria2 configuration files
@@ -88,6 +108,29 @@ func (g *ConfigGenerator) GenerateConfig(tag string, nodeInfo *panel.NodeInfo, o
 		},
 		Stats: &Hy2StatsConfig{
 			Listen: fmt.Sprintf("127.0.0.1:%d", 25590+nodeInfo.Id%1000), // Unique port per node
+		},
+		// Default outbounds
+		Outbounds: []Hy2Outbound{
+			{
+				Name: "direct",
+				Type: "direct",
+				Direct: &Hy2DirectConfig{
+					Mode: "auto",
+				},
+			},
+		},
+		// Default ACL - block private IPs (same as Xray route.json)
+		ACL: &Hy2ACLConfig{
+			Inline: []string{
+				"reject(geoip:private)",  // Block private IP ranges
+				"reject(127.0.0.0/8)",    // Block loopback
+				"reject(10.0.0.0/8)",     // Block Class A private
+				"reject(172.16.0.0/12)",  // Block Class B private
+				"reject(192.168.0.0/16)", // Block Class C private
+				"reject(fc00::/7)",       // Block IPv6 ULA
+				"reject(fe80::/10)",      // Block IPv6 link-local
+				"direct(all)",            // Allow everything else
+			},
 		},
 	}
 

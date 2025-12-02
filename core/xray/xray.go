@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/nsevo/v2sp/conf"
@@ -27,6 +28,53 @@ var _ vCore.Core = (*Xray)(nil)
 func init() {
 	vCore.RegisterCore("xray", New)
 }
+
+// Default configurations
+const defaultRouteConfig = `{
+    "domainStrategy": "AsIs",
+    "rules": [
+        {
+            "outboundTag": "block",
+            "ip": ["geoip:private"]
+        },
+        {
+            "outboundTag": "block",
+            "ip": [
+                "127.0.0.0/8",
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "fc00::/7",
+                "fe80::/10"
+            ]
+        },
+        {
+            "outboundTag": "IPv4_out",
+            "network": "udp,tcp"
+        }
+    ]
+}`
+
+const defaultOutboundConfig = `[
+    {
+        "tag": "IPv4_out",
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIPv4v6"
+        }
+    },
+    {
+        "tag": "IPv6_out",
+        "protocol": "freedom",
+        "settings": {
+            "domainStrategy": "UseIPv6"
+        }
+    },
+    {
+        "protocol": "blackhole",
+        "tag": "block"
+    }
+]`
 
 // Xray Structure
 type Xray struct {
@@ -68,25 +116,58 @@ func parseConnectionConfig(c *conf.XrayConnectionConfig) (policy *coreConf.Polic
 	return
 }
 
+// ensureConfigFile ensures a config file exists, creating it with default content if not
+func ensureConfigFile(path string, defaultContent string) error {
+	if path == "" {
+		return nil
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Create directory if needed
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %v", dir, err)
+		}
+
+		// Write default config
+		if err := os.WriteFile(path, []byte(defaultContent), 0644); err != nil {
+			return fmt.Errorf("failed to create config file %s: %v", path, err)
+		}
+		log.Infof("Created default config file: %s", path)
+	}
+	return nil
+}
+
 func getCore(c *conf.XrayConfig) *core.Instance {
 	os.Setenv("XRAY_LOCATION_ASSET", c.AssetPath)
+
+	// Ensure config files exist (auto-create with defaults if missing)
+	if err := ensureConfigFile(c.RouteConfigPath, defaultRouteConfig); err != nil {
+		log.WithError(err).Warn("Failed to ensure route config")
+	}
+	if err := ensureConfigFile(c.OutboundConfigPath, defaultOutboundConfig); err != nil {
+		log.WithError(err).Warn("Failed to ensure outbound config")
+	}
+
 	// Log Config
 	coreLogConfig := &coreConf.LogConfig{
 		LogLevel:  c.LogConfig.Level,
 		AccessLog: c.LogConfig.AccessPath,
 		ErrorLog:  c.LogConfig.ErrorPath,
 	}
+
 	// DNS config
 	coreDnsConfig := &coreConf.DNSConfig{}
 	os.Setenv("XRAY_DNS_PATH", "")
 	if c.DnsConfigPath != "" {
 		data, err := os.ReadFile(c.DnsConfigPath)
 		if err != nil {
-			log.Error(fmt.Sprintf("Failed to read xray dns config file: %v", err))
+			log.Warnf("DNS config file not found: %s, using default DNS", c.DnsConfigPath)
 			coreDnsConfig = &coreConf.DNSConfig{}
 		} else {
 			if err := json.Unmarshal(data, coreDnsConfig); err != nil {
-				log.Error(fmt.Sprintf("Failed to unmarshal xray dns config: %v. Using default DNS options.", err))
+				log.Warnf("Failed to parse DNS config: %v, using default DNS", err)
 				coreDnsConfig = &coreConf.DNSConfig{}
 			}
 		}
@@ -96,15 +177,16 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 	if err != nil {
 		log.WithField("err", err).Panic("Failed to understand DNS config, Please check: https://xtls.github.io/config/dns.html for help")
 	}
+
 	// Routing config
 	coreRouterConfig := &coreConf.RouterConfig{}
 	if c.RouteConfigPath != "" {
 		data, err := os.ReadFile(c.RouteConfigPath)
 		if err != nil {
-			log.WithField("err", err).Panic("Failed to read Routing config file")
+			log.Warnf("Route config file not found: %s, using empty route config", c.RouteConfigPath)
 		} else {
 			if err = json.Unmarshal(data, coreRouterConfig); err != nil {
-				log.WithField("err", err).Panic("Failed to unmarshal Routing config")
+				log.Warnf("Failed to parse Route config: %v, using empty route config", err)
 			}
 		}
 	}
@@ -112,15 +194,16 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 	if err != nil {
 		log.WithField("err", err).Panic("Failed to understand Routing config. Please check: https://xtls.github.io/config/routing.html for help")
 	}
+
 	// Custom Inbound config
 	var coreCustomInboundConfig []coreConf.InboundDetourConfig
 	if c.InboundConfigPath != "" {
 		data, err := os.ReadFile(c.InboundConfigPath)
 		if err != nil {
-			log.WithField("err", err).Panic("Failed to read Custom Inbound config file")
+			log.Warnf("Inbound config file not found: %s, skipping", c.InboundConfigPath)
 		} else {
 			if err = json.Unmarshal(data, &coreCustomInboundConfig); err != nil {
-				log.WithField("err", err).Panic("Failed to unmarshal Custom Inbound config")
+				log.Warnf("Failed to parse Inbound config: %v, skipping", err)
 			}
 		}
 	}
@@ -132,15 +215,16 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 		}
 		inBoundConfig = append(inBoundConfig, oc)
 	}
+
 	// Custom Outbound config
 	var coreCustomOutboundConfig []coreConf.OutboundDetourConfig
 	if c.OutboundConfigPath != "" {
 		data, err := os.ReadFile(c.OutboundConfigPath)
 		if err != nil {
-			log.WithField("err", err).Panic("Failed to read Custom Outbound config file")
+			log.Warnf("Outbound config file not found: %s, skipping", c.OutboundConfigPath)
 		} else {
 			if err = json.Unmarshal(data, &coreCustomOutboundConfig); err != nil {
-				log.WithField("err", err).Panic("Failed to unmarshal Custom Outbound config")
+				log.Warnf("Failed to parse Outbound config: %v, skipping", err)
 			}
 		}
 	}
@@ -152,11 +236,13 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 		}
 		outBoundConfig = append(outBoundConfig, oc)
 	}
+
 	// Policy config
 	levelPolicyConfig := parseConnectionConfig(c.ConnectionConfig)
 	corePolicyConfig := &coreConf.PolicyConfig{}
 	corePolicyConfig.Levels = map[uint32]*coreConf.Policy{0: levelPolicyConfig}
 	policyConfig, _ := corePolicyConfig.Build()
+
 	// Build Xray conf
 	config := &core.Config{
 		App: []*serial.TypedMessage{

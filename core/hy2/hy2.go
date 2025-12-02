@@ -29,22 +29,43 @@ type Hy2Node struct {
 
 // Hy2 is the Hysteria2 core implementation using subprocess mode
 type Hy2 struct {
-	access    sync.Mutex
-	config    *conf.Hy2Config
-	configGen *ConfigGenerator
-	nodes     sync.Map // tag -> *Hy2Node
+	access     sync.Mutex
+	config     *conf.Hy2Config
+	configGen  *ConfigGenerator
+	binaryPath string
+	nodes      sync.Map // tag -> *Hy2Node
 }
 
 // New creates a new Hy2 core
 func New(c *conf.CoreConfig) (vCore.Core, error) {
-	// Check if Hysteria2 binary exists
-	if !CheckBinaryExists() {
-		log.Warn("Hysteria2 binary not found at " + DefaultHy2Binary + ". Please install it first.")
+	cfg := c.Hy2Config
+	if cfg == nil {
+		cfg = conf.NewHy2Config()
 	}
 
+	// Use configured paths or defaults
+	binaryPath := cfg.BinaryPath
+	if binaryPath == "" {
+		binaryPath = DefaultHy2Binary
+	}
+
+	configDir := cfg.ConfigDir
+	if configDir == "" {
+		configDir = DefaultHy2ConfigDir
+	}
+
+	// Check if Hysteria2 binary exists
+	if !CheckBinaryExistsAt(binaryPath) {
+		log.Warn("Hysteria2 binary not found at " + binaryPath + ". Please install it first.")
+	}
+
+	configGen := NewConfigGenerator()
+	configGen.SetConfigDir(configDir)
+
 	return &Hy2{
-		config:    c.Hy2Config,
-		configGen: NewConfigGenerator(),
+		config:     cfg,
+		configGen:  configGen,
+		binaryPath: binaryPath,
 	}, nil
 }
 
@@ -53,10 +74,10 @@ func (h *Hy2) Start() error {
 	log.Info("Hysteria2 Core (subprocess mode) started")
 
 	// Check binary exists
-	if !CheckBinaryExists() {
-		log.Warn("Hysteria2 binary not found. Nodes will fail to start until installed.")
+	if !CheckBinaryExistsAt(h.binaryPath) {
+		log.Warn("Hysteria2 binary not found at " + h.binaryPath + ". Nodes will fail to start until installed.")
 	} else {
-		if version, err := GetBinaryVersion(); err == nil {
+		if version, err := GetBinaryVersionAt(h.binaryPath); err == nil {
 			log.WithField("version", version).Info("Hysteria2 binary found")
 		}
 	}
@@ -97,12 +118,13 @@ func (h *Hy2) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) er
 	}
 
 	// Check binary
-	if !CheckBinaryExists() {
-		return fmt.Errorf("hysteria2 binary not found at %s", DefaultHy2Binary)
+	if !CheckBinaryExistsAt(h.binaryPath) {
+		return fmt.Errorf("hysteria2 binary not found at %s", h.binaryPath)
 	}
 
-	// Create process manager
+	// Create process manager with configured binary path
 	process := NewProcess(tag)
+	process.SetBinaryPath(h.binaryPath)
 
 	// Create node (users will be added later via AddUsers)
 	node := &Hy2Node{
