@@ -13,8 +13,7 @@ import (
 
 var menuCommand = &cobra.Command{
 	Use:   "menu",
-	Short: "Interactive menu (TUI)",
-	Long:  "Launch interactive terminal UI for managing v2sp",
+	Short: "Interactive menu",
 	Run:   menuHandle,
 	Args:  cobra.NoArgs,
 }
@@ -26,123 +25,85 @@ func init() {
 func menuHandle(_ *cobra.Command, _ []string) {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Println(ui.Error("Failed to start menu"))
+		fmt.Println("Failed to start menu:", err)
 		os.Exit(1)
 	}
 }
 
-// 菜单项定义
 type MenuItem struct {
-	Key         string
-	Title       string
-	Description string
-	Action      func() tea.Msg
-	Condition   func() bool // 是否显示此项
+	Key       string
+	Title     string
+	Action    func() tea.Msg
+	Condition func() bool
 }
 
 type model struct {
-	items       []MenuItem
-	cursor      int
-	selected    int
-	status      string
-	message     string
-	messageType string // success, error, warning, info
-	loading     bool
-	spinner     *ui.Spinner
+	items  []MenuItem
+	cursor int
 }
 
 func initialModel() model {
 	return model{
-		items:   getMenuItems(),
-		cursor:  0,
-		spinner: ui.NewSpinner(),
+		items:  getMenuItems(),
+		cursor: 0,
 	}
 }
 
 func getMenuItems() []MenuItem {
 	return []MenuItem{
 		{
-			Key:         "1",
-			Title:       "Start Service",
-			Description: "Start v2sp service",
-			Action:      startServiceAction,
+			Key:   "1",
+			Title: "Start",
+			Action: startServiceAction,
 			Condition: func() bool {
 				running, _ := checkRunning()
 				return !running
 			},
 		},
 		{
-			Key:         "2",
-			Title:       "Stop Service",
-			Description: "Stop v2sp service",
-			Action:      stopServiceAction,
+			Key:   "2",
+			Title: "Stop",
+			Action: stopServiceAction,
 			Condition: func() bool {
 				running, _ := checkRunning()
 				return running
 			},
 		},
 		{
-			Key:         "3",
-			Title:       "Restart Service",
-			Description: "Restart v2sp service",
-			Action:      restartServiceAction,
-			Condition:   func() bool { return true },
+			Key:       "3",
+			Title:     "Restart",
+			Action:    restartServiceAction,
+			Condition: func() bool { return true },
 		},
 		{
-			Key:         "4",
-			Title:       "View Status",
-			Description: "Show detailed status information",
-			Action:      statusAction,
-			Condition:   func() bool { return true },
+			Key:       "s",
+			Title:     "Status",
+			Action:    statusAction,
+			Condition: func() bool { return true },
 		},
 		{
-			Key:         "5",
-			Title:       "View Logs",
-			Description: "Show service logs",
-			Action:      logsAction,
-			Condition:   func() bool { return true },
+			Key:       "l",
+			Title:     "Logs",
+			Action:    logsAction,
+			Condition: func() bool { return true },
 		},
 		{
-			Key:         "6",
-			Title:       "Edit Configuration",
-			Description: "Edit config.json with $EDITOR",
-			Action:      editConfigAction,
-			Condition:   func() bool { return true },
+			Key:       "c",
+			Title:     "Config",
+			Action:    editConfigAction,
+			Condition: func() bool { return true },
 		},
 		{
-			Key:         "7",
-			Title:       "Generate Config",
-			Description: "Interactive configuration wizard",
-			Action:      generateConfigAction,
-			Condition:   func() bool { return true },
+			Key:       "h",
+			Title:     "Health",
+			Action:    healthCheckAction,
+			Condition: func() bool { return true },
 		},
 		{
-			Key:         "8",
-			Title:       "Health Check",
-			Description: "Run system health checks",
-			Action:      healthCheckAction,
-			Condition:   func() bool { return true },
-		},
-		{
-			Key:         "9",
-			Title:       "Generate X25519 Key",
-			Description: "Generate encryption keys",
-			Action:      x25519Action,
-			Condition:   func() bool { return true },
-		},
-		{
-			Key:         "U",
-			Title:       "Update v2sp",
-			Description: "Update to latest version",
-			Action:      updateAction,
-			Condition:   func() bool { return true },
-		},
-		{
-			Key:         "Q",
-			Title:       "Quit",
-			Description: "Exit menu",
-			Action:      func() tea.Msg { return tea.Quit() },
-			Condition:   func() bool { return true },
+			Key:       "q",
+			Title:     "Quit",
+			Action:    func() tea.Msg { return tea.Quit() },
+			Condition: func() bool { return true },
 		},
 	}
 }
@@ -155,40 +116,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q", "Q":
+		case "ctrl+c", "q":
 			return m, tea.Quit
-
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
 			}
-
 		case "down", "j":
 			visibleItems := m.getVisibleItems()
 			if m.cursor < len(visibleItems)-1 {
 				m.cursor++
 			}
-
 		case "enter":
 			visibleItems := m.getVisibleItems()
 			if m.cursor < len(visibleItems) {
 				item := visibleItems[m.cursor]
 				if item.Action != nil {
-					// 执行操作
 					result := item.Action()
 					if result != nil {
-						// 处理返回消息
 						if quitMsg, ok := result.(tea.QuitMsg); ok {
 							return m, func() tea.Msg { return quitMsg }
 						}
 					}
-					// 刷新菜单项
 					m.items = getMenuItems()
 				}
 			}
-
 		default:
-			// 检查快捷键
+			// 快捷键
 			visibleItems := m.getVisibleItems()
 			for _, item := range visibleItems {
 				if strings.ToLower(msg.String()) == strings.ToLower(item.Key) {
@@ -206,7 +160,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-
 	return m, nil
 }
 
@@ -223,117 +176,101 @@ func (m model) getVisibleItems() []MenuItem {
 func (m model) View() string {
 	var s strings.Builder
 
-	// 获取服务状态
 	running, _ := checkRunning()
-	var statusLine string
-	if running {
-		statusLine = ui.StatusLine("running", "Service is running")
-	} else {
-		statusLine = ui.StatusLine("stopped", "Service is stopped")
-	}
-
-	// 头部
-	s.WriteString(ui.Header("v2sp Control Panel", ""))
-	s.WriteString(ui.Section(statusLine))
+	
+	s.WriteString("\n")
+	s.WriteString(strings.Repeat("─", 50))
+	s.WriteString("\n")
+	s.WriteString("v2sp Control")
+	s.WriteString("\n")
+	s.WriteString(strings.Repeat("─", 50))
 	s.WriteString("\n\n")
 
-	// 菜单项
+	if running {
+		s.WriteString(ui.SuccessStyle.Render("● Running"))
+	} else {
+		s.WriteString(ui.DimStyle.Render("○ Stopped"))
+	}
+	s.WriteString("\n\n")
+
 	visibleItems := m.getVisibleItems()
 	for i, item := range visibleItems {
-		cursor := " "
+		cursor := "  "
 		if m.cursor == i {
-			cursor = ui.InfoStyle.Render(">")
+			cursor = ui.InfoStyle.Render("> ")
 		}
 
-		keyStyle := ui.KeyStyle
-		titleStyle := ui.TextStyle
-		if m.cursor == i {
-			titleStyle = ui.SuccessStyle
-		}
-
-		line := fmt.Sprintf("%s %s %-20s %s",
+		s.WriteString(fmt.Sprintf("%s[%s] %s\n",
 			cursor,
-			keyStyle.Render("["+item.Key+"]"),
-			titleStyle.Render(item.Title),
-			ui.DimStyle.Render(item.Description),
-		)
-		s.WriteString("  " + line + "\n")
+			ui.SuccessStyle.Render(item.Key),
+			item.Title,
+		))
 	}
 
-	// 底部帮助
-	s.WriteString(ui.Footer(
-		ui.DimStyle.Render("↑↓ Navigate"),
-		ui.DimStyle.Render("Enter Select"),
-		ui.DimStyle.Render("Number/Letter Quick action"),
-		ui.Key("Q", "Quit"),
-	))
+	s.WriteString("\n")
+	s.WriteString(strings.Repeat("─", 50))
+	s.WriteString("\n")
+	s.WriteString(ui.DimStyle.Render("↑↓/jk: navigate | Enter/Key: select | q: quit"))
+	s.WriteString("\n")
 
 	return s.String()
 }
 
 // 操作函数
-
 func startServiceAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Info("Starting v2sp..."))
+	fmt.Print("\033[H\033[2J") // 清屏
+	fmt.Println("Starting v2sp...")
 	_, err := exec.RunCommandByShell("systemctl start v2sp")
 	if err != nil {
-		fmt.Println(ui.Error("Failed to start service"))
-		fmt.Println(ui.DimStyle.Render("  " + err.Error()))
+		fmt.Println("✗ Failed:", err)
 	} else {
-		fmt.Println(ui.Success("Service started successfully"))
+		fmt.Println("✓ Started")
 	}
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
+	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
 	return nil
 }
 
 func stopServiceAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Info("Stopping v2sp..."))
+	fmt.Print("\033[H\033[2J")
+	fmt.Println("Stopping v2sp...")
 	_, err := exec.RunCommandByShell("systemctl stop v2sp")
 	if err != nil {
-		fmt.Println(ui.Error("Failed to stop service"))
-		fmt.Println(ui.DimStyle.Render("  " + err.Error()))
+		fmt.Println("✗ Failed:", err)
 	} else {
-		fmt.Println(ui.Success("Service stopped successfully"))
+		fmt.Println("✓ Stopped")
 	}
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
+	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
 	return nil
 }
 
 func restartServiceAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Info("Restarting v2sp..."))
+	fmt.Print("\033[H\033[2J")
+	fmt.Println("Restarting v2sp...")
 	_, err := exec.RunCommandByShell("systemctl restart v2sp")
 	if err != nil {
-		fmt.Println(ui.Error("Failed to restart service"))
-		fmt.Println(ui.DimStyle.Render("  " + err.Error()))
+		fmt.Println("✗ Failed:", err)
 	} else {
-		fmt.Println(ui.Success("Service restarted successfully"))
+		fmt.Println("✓ Restarted")
 	}
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
+	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
 	return nil
 }
 
 func statusAction() tea.Msg {
-	fmt.Println()
+	fmt.Print("\033[H\033[2J")
 	showStatus()
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
+	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
 	return nil
 }
 
 func logsAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Info("Opening logs (Ctrl+C to exit)..."))
-	fmt.Println()
+	fmt.Print("\033[H\033[2J")
+	fmt.Println("Logs (Ctrl+C to exit)")
+	fmt.Println(strings.Repeat("─", 50))
 	exec.RunCommandStd("journalctl", "-u", "v2sp", "-f", "-n", "50")
 	return nil
 }
@@ -343,69 +280,14 @@ func editConfigAction() tea.Msg {
 	if editor == "" {
 		editor = "vi"
 	}
-	fmt.Println()
-	fmt.Println(ui.Info("Opening config in " + editor + "..."))
 	exec.RunCommandStd(editor, "/etc/v2sp/config.json")
-	fmt.Println()
-	fmt.Println(ui.Warning("Remember to restart service after editing config"))
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	return nil
-}
-
-func generateConfigAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Info("Launching configuration wizard..."))
-	fmt.Println()
-	// TODO: 实现配置向导
-	fmt.Println(ui.Warning("Configuration wizard not yet implemented"))
-	fmt.Println(ui.DimStyle.Render("  Use: v2sp config init"))
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
-	fmt.Scanln()
 	return nil
 }
 
 func healthCheckAction() tea.Msg {
-	fmt.Println()
+	fmt.Print("\033[H\033[2J")
 	healthHandle(nil, nil)
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
+	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
 	return nil
 }
-
-func x25519Action() tea.Msg {
-	fmt.Println()
-	executeX25519()
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	return nil
-}
-
-func updateAction() tea.Msg {
-	fmt.Println()
-	fmt.Println(ui.Warning("This will update v2sp to the latest version"))
-	fmt.Print(ui.DimStyle.Render("Continue? (y/N): "))
-	var answer string
-	fmt.Scanln(&answer)
-	if strings.ToLower(answer) != "y" {
-		fmt.Println(ui.Info("Update cancelled"))
-		fmt.Println()
-		fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
-		fmt.Scanln()
-		return nil
-	}
-
-	fmt.Println()
-	fmt.Println(ui.Info("Downloading latest version..."))
-	// TODO: 实现更新逻辑
-	fmt.Println(ui.Warning("Update not yet implemented"))
-	fmt.Println()
-	fmt.Print(ui.DimStyle.Render("Press Enter to continue..."))
-	fmt.Scanln()
-	return nil
-}
-
