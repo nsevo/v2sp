@@ -4,11 +4,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/nsevo/v2sp/api/panel"
 	"github.com/nsevo/v2sp/conf"
 	"gopkg.in/yaml.v3"
 )
+
+// sanitizeFilename removes or replaces characters that are invalid in filenames
+func sanitizeFilename(name string) string {
+	// Replace common URL/path separators
+	name = strings.ReplaceAll(name, "://", "_")
+	name = strings.ReplaceAll(name, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, ":", "_")
+	name = strings.ReplaceAll(name, "[", "")
+	name = strings.ReplaceAll(name, "]", "")
+	// Remove any remaining invalid characters
+	re := regexp.MustCompile(`[<>"|?*]`)
+	name = re.ReplaceAllString(name, "")
+	// Collapse multiple underscores
+	re = regexp.MustCompile(`_+`)
+	name = re.ReplaceAllString(name, "_")
+	// Trim underscores from ends
+	name = strings.Trim(name, "_")
+	return name
+}
 
 // Hy2ServerConfig represents Hysteria2 server configuration
 type Hy2ServerConfig struct {
@@ -153,8 +175,9 @@ func (g *ConfigGenerator) GenerateConfig(tag string, nodeInfo *panel.NodeInfo, o
 		return "", fmt.Errorf("failed to marshal config: %v", err)
 	}
 
-	// Write config file
-	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", tag))
+	// Write config file (sanitize tag for safe filename)
+	safeTag := sanitizeFilename(tag)
+	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", safeTag))
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
 		return "", fmt.Errorf("failed to write config: %v", err)
 	}
@@ -164,7 +187,8 @@ func (g *ConfigGenerator) GenerateConfig(tag string, nodeInfo *panel.NodeInfo, o
 
 // UpdateUsers updates the users in a configuration file
 func (g *ConfigGenerator) UpdateUsers(tag string, users []panel.UserInfo) error {
-	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", tag))
+	safeTag := sanitizeFilename(tag)
+	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", safeTag))
 
 	// Read existing config
 	data, err := os.ReadFile(configPath)
@@ -209,6 +233,7 @@ func (g *ConfigGenerator) GetStatsAddress(nodeID int) string {
 
 // DeleteConfig removes a configuration file
 func (g *ConfigGenerator) DeleteConfig(tag string) error {
-	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", tag))
+	safeTag := sanitizeFilename(tag)
+	configPath := filepath.Join(g.configDir, fmt.Sprintf("%s.yaml", safeTag))
 	return os.Remove(configPath)
 }
