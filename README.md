@@ -1,30 +1,42 @@
 # v2sp
 
-A high-performance, production-ready Xray backend designed for self-hosted proxy panels. Built with official Xray-core, featuring comprehensive traffic management, intelligent connection handling, and seamless API integration.
+A high-performance, production-ready multi-core proxy backend designed for self-hosted panels. Built with official Xray-core and Hysteria2, featuring comprehensive traffic management, intelligent connection handling, and seamless API integration.
 
 ## Overview
 
-v2sp is a multi-node management backend that bridges self-hosted panels with Xray-core. It provides enterprise-grade features including granular user limits, intelligent connection pooling, automated certificate management, and real-time traffic accounting—all through a simple, language-agnostic JSON API.
+v2sp is a multi-node, multi-core management backend that bridges self-hosted panels with Xray-core and Hysteria2. It provides enterprise-grade features including granular user limits, intelligent connection pooling, automated certificate management, and real-time traffic accounting—all through a simple, language-agnostic JSON API.
 
 ### Key Features
 
-**Core Capabilities**
-- Based on official Xray-core v1.251201.0 with full protocol support (VLESS, VMess, Trojan, Shadowsocks)
-- Multi-node management in a single process with independent configurations
-- Real-time traffic accounting with configurable reporting intervals
-- Automated TLS certificate provisioning via ACME with multiple DNS provider support
+**Multi-Core Architecture**
+- Xray-core: VLESS, VMess, Trojan, Shadowsocks with XTLS/Reality support
+- Hysteria2: High-performance UDP-based protocol (subprocess mode)
+- Automatic core selection based on node protocol type
+- Independent node operation - single node failure doesn't affect others
 
 **Traffic & Access Control**
 - Per-user speed limiting with dynamic rate adjustment
 - Device/IP-based connection limits with configurable thresholds
-- Intelligent connection pooling with automatic oldest-connection eviction
+- Intelligent connection pooling with automatic oldest-connection eviction (FIFO)
 - Protocol and domain-based traffic filtering and auditing
 
+**Fault Tolerance & Stability**
+- Independent node startup - failed nodes are skipped, others continue
+- API communication failures handled gracefully with automatic retry
+- No Panic on transient errors - service remains stable
+- Existing connections unaffected by API outages
+
+**Auto-Configuration**
+- Configuration files auto-generated if missing (route.json, outbound.json)
+- Certificate directories auto-created
+- Hysteria2 node configs dynamically generated
+- Default ACL rules for private IP blocking
+
 **Advanced Features**
-- XTLS and Reality protocol support for enhanced performance and security
-- DNS-based traffic routing with custom rule sets
+- Automated TLS certificate provisioning via ACME (HTTP/DNS modes)
 - Graceful configuration reloading without service interruption
-- Comprehensive logging with structured output and log rotation
+- Comprehensive logging with structured output
+- Supports 50+ DNS providers for certificate validation
 
 ## Quick Start
 
@@ -36,9 +48,26 @@ wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh &&
 
 The installation script will:
 1. Download the latest v2sp binary
-2. Generate default configuration files
-3. Set up systemd service
-4. Configure log rotation
+2. Download Hysteria2 binary (for hysteria2 nodes)
+3. Generate default configuration files
+4. Set up systemd service
+5. Create necessary directories (/etc/v2sp, /etc/v2sp/cert, /etc/v2sp/hy2)
+
+### Configuration Generator
+
+After installation, generate node configuration:
+
+```bash
+v2sp config
+# Or run the script directly:
+bash /path/to/initconfig.sh
+```
+
+The generator will:
+1. Fetch node info from your panel API
+2. Auto-detect protocol type and TLS requirements
+3. Configure certificate settings based on protocol
+4. Optionally enable automatic certificate provisioning
 
 ### Basic Usage
 
@@ -58,51 +87,67 @@ systemctl reload v2sp
 
 ## Architecture
 
-### Design Philosophy
+### Multi-Core Design
 
-v2sp follows a composition-over-inheritance design pattern, integrating tightly with Xray-core while maintaining clean separation of concerns:
+v2sp uses a selector pattern to manage multiple proxy cores:
 
 ```
-┌─────────────────────────────────────────────┐
-│           Panel API (HTTP/HTTPS)            │
-└──────────────────┬──────────────────────────┘
-                   │ JSON
-         ┌─────────▼─────────┐
-         │   API Client      │
-         │  (Auto Retry)     │
-         └─────────┬─────────┘
-                   │
-         ┌─────────▼─────────┐
-         │   Controller      │
-         │ (Node Manager)    │
-         └─────────┬─────────┘
-                   │
-    ┌──────────────┼──────────────┐
-    │              │              │
-┌───▼───┐    ┌────▼────┐    ┌───▼───┐
-│Limiter│    │ Counter │    │ Core  │
-│       │    │         │    │(Xray) │
-└───────┘    └─────────┘    └───┬───┘
-                                 │
-                    ┌────────────┼────────────┐
-                    │            │            │
-              ┌─────▼─────┐ ┌───▼────┐ ┌────▼────┐
-              │Dispatcher │ │Inbound │ │Outbound │
-              │ (Custom)  │ │        │ │         │
-              └───────────┘ └────────┘ └─────────┘
+┌─────────────────────────────────────────────────────────┐
+│                    Panel API (JSON)                      │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+              ┌────────────▼────────────┐
+              │    Node Controller      │
+              │  (Per-Node Management)  │
+              └────────────┬────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+    ┌────▼────┐      ┌────▼────┐      ┌────▼────┐
+    │ Limiter │      │ Counter │      │Selector │
+    │         │      │         │      │         │
+    └─────────┘      └─────────┘      └────┬────┘
+                                           │
+                      ┌────────────────────┼────────────────────┐
+                      │                    │                    │
+               ┌──────▼──────┐     ┌──────▼──────┐     ┌──────▼──────┐
+               │  Xray Core  │     │ Hysteria2   │     │  (Future)   │
+               │  (in-proc)  │     │ (subprocess)│     │             │
+               └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-### Components
+### Supported Protocols
 
-**API Client**: Handles panel communication with automatic retry, ETag caching, and connection pooling.
+| Core | Protocol | TLS Requirement | Description |
+|------|----------|-----------------|-------------|
+| Xray | vless | Optional/Reality | VLESS with XTLS support |
+| Xray | vmess | Optional | VMess with AEAD encryption |
+| Xray | trojan | Required | Trojan protocol |
+| Xray | shadowsocks | None | Shadowsocks 2022 support |
+| Hysteria2 | hysteria2 | Required | UDP-based, high-performance |
 
-**Controller**: Manages node lifecycle, coordinates user updates, and schedules periodic tasks (traffic reporting, online user tracking).
+### Fault Tolerance
 
-**Limiter**: Enforces per-user rate limits, device limits, and connection limits using token bucket algorithms and concurrent-safe maps.
+**Node Startup**
+```
+Starting nodes...
+  Node 209: ERROR - cert request failed (skipped)
+  Node 210: OK - vless started
+  Node 211: OK - hysteria2 started
+Summary: 2 success, 1 failed, 3 total
+```
 
-**Counter**: Tracks upload/download bytes per user with atomic operations for accurate accounting.
+- Failed nodes are logged and skipped
+- Successful nodes continue to operate
+- Service only fails if ALL nodes fail
 
-**Custom Dispatcher**: Extends Xray's dispatcher to inject traffic accounting, rate limiting, and connection management into the data path without modifying core Xray code.
+**Runtime Errors**
+```
+API call failed: 500 Internal Server Error
+  -> Log error, retry next interval
+  -> Existing connections unaffected
+  -> User list preserved from last successful fetch
+```
 
 ## Features
 
@@ -115,168 +160,136 @@ v2sp follows a composition-over-inheritance design pattern, integrating tightly 
 - Token bucket implementation for smooth rate limiting
 
 **Connection Management**
-- Per-user concurrent connection limits
-- Automatic oldest-connection eviction when limit exceeded
+- Per-user concurrent connection limits (`conn_limit`)
+- Automatic oldest-connection eviction (FIFO) when limit exceeded
 - Separate tracking for TCP and UDP connections
-- Connection creation time tracking for FIFO eviction
+- Real-time connection counting
 
 **Device Limiting**
-- IP-based device counting
+- IP-based device counting (`device_limit`)
 - Configurable simultaneous device limits
-- IPv4/IPv6 support with IPv6 address normalization
+- IPv4/IPv6 support with address normalization
 - Grace period for transient IP changes
 
-### Protocol Support
+### Hysteria2 Port Hopping
 
-**Supported Protocols**
-- VLESS (with XTLS support)
-- VMess (with AEAD encryption)
-- Trojan (standard and XTLS variants)
-- Shadowsocks (including 2022 edition)
+Port hopping helps bypass ISP UDP throttling by switching between multiple ports.
 
-**Transport Methods**
-- TCP (with HTTP obfuscation)
-- WebSocket (with custom headers)
-- HTTP/2 (gRPC mode)
-- QUIC (experimental)
-- mKCP (with various header types)
-- SplitHTTP (for restrictive networks)
+**How It Works**
+```
+Client ──UDP──► [20000-50000] ──iptables─► [:20000] ──► Hy2 Server
+```
 
-### Security & Privacy
+1. Hysteria2 server listens on the first port of the range
+2. v2sp automatically creates iptables rules to redirect entire range
+3. Client connects to any port in range, randomly hopping
 
-**Certificate Management**
-- Automatic ACME certificate provisioning
-- Support for 50+ DNS providers
-- Certificate auto-renewal
-- Self-signed certificate fallback
+**Port Configuration**
 
-**Privacy Features**
-- Reality protocol for TLS fingerprint randomization
-- No persistent user data storage
-- Optional traffic obfuscation
-- Configurable logging levels
+| `server_port` Value | Mode | v2sp Action |
+|---------------------|------|-------------|
+| `443` (integer) | Single port | Listen on 443 only |
+| `"20000-50000"` (string) | Port hopping | Listen on 20000, iptables redirect 20000-50000 |
+
+**Database Field**: Uses existing `port_range` field (e.g., `"20000-50000"`)
+- If `port_range` is empty: single port mode using `backend_port`
+- If `port_range` is set: port hopping mode, value passed as `server_port`
+
+**API Response Examples**
+
+Single port (no hopping):
+```json
+{
+  "node_type": "hysteria2",
+  "server_port": 443
+}
+```
+
+Port hopping (automatic iptables):
+```json
+{
+  "node_type": "hysteria2",
+  "server_port": "20000-50000"
+}
+```
+
+**Automatic Management**
+- Rules created on node startup with unique comment tags
+- Stale rules cleaned up on v2sp restart
+- Rules removed when node is deleted
+- Both IPv4 and IPv6 supported
+
+**Generated iptables Rules**
+```bash
+# IPv4
+iptables -t nat -A PREROUTING -p udp --dport 20000:50000 -j REDIRECT --to-ports 20000 -m comment --comment "v2sp-hy2:node-tag"
+# IPv6
+ip6tables -t nat -A PREROUTING -p udp --dport 20000:50000 -j REDIRECT --to-ports 20000 -m comment --comment "v2sp-hy2:node-tag"
+```
+
+### Certificate Management
+
+**Supported Modes**
+
+| Mode | Description | Auto-Renewal |
+|------|-------------|--------------|
+| `none` | No TLS (Reality, plain) | N/A |
+| `file` | Manual certificate files | No |
+| `http` | ACME HTTP-01 challenge | Yes |
+| `dns` | ACME DNS-01 challenge | Yes |
+| `self` | Self-signed certificate | No |
+
+**Auto-Configuration**
+```bash
+# initconfig.sh automatically detects TLS requirements:
+Node 209: hysteria2 -> jp.example.com (TLS required, auto-cert)
+Node 210: vless (Reality, no cert needed)
+Node 211: shadowsocks (no TLS)
+```
 
 ## API Specification
 
 ### Overview
 
-v2sp communicates with panel backends through a single HTTP/HTTPS endpoint. The API is language-agnostic and follows RESTful principles with JSON payloads.
+v2sp communicates with panel backends through HTTP/HTTPS JSON API.
 
 ### Authentication
 
-All requests include the following query parameters:
+All requests include:
 
-| Parameter   | Type   | Description                                    |
-|-------------|--------|------------------------------------------------|
-| `action`    | string | API action (config, user, push, alive, etc.)   |
-| `node_id`   | int    | Node identifier                                |
-| `token`     | string | API key for authentication                     |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `action` | string | API action (config, user, push, alive) |
+| `node_id` | int | Node identifier |
+| `token` | string | API authentication key |
 
-**Example Request**
-```
-GET /api/v2sp?action=config&node_id=1&token=your_api_key
-```
+### Required Response Fields
 
-### Response Format
+**Node Configuration** (`action=config`)
 
-**Success Response** (HTTP 200)
-```json
-{
-  "users": [...]
-}
-```
+The API MUST return `node_type` field:
 
-**Not Modified** (HTTP 304)
-No body, indicates cached data is still valid.
+| node_type | Core | Description |
+|-----------|------|-------------|
+| `vless` | Xray | VLESS protocol |
+| `vmess` | Xray | VMess protocol |
+| `trojan` | Xray | Trojan protocol |
+| `shadowsocks` | Xray | Shadowsocks protocol |
+| `hysteria2` | Hysteria2 | Hysteria2 protocol |
 
-**Error Response** (HTTP 4xx/5xx)
-```json
-{
-  "message": "Descriptive error message"
-}
-```
-
-### Endpoints
-
-#### GET /api?action=config
-
-Retrieves node configuration including protocol settings, TLS certificates, and routing rules.
-
-**Required Response Field**
-
-The API response MUST include `node_type` field. Supported protocol types:
-
-| node_type      | Description                                      |
-|----------------|--------------------------------------------------|
-| `vless`        | VLESS protocol (recommended for best performance)|
-| `vmess`        | VMess protocol                                   |
-| `trojan`       | Trojan protocol                                  |
-| `shadowsocks`  | Shadowsocks protocol (supports 2022 encryption)  |
-| `hysteria`     | Hysteria protocol                                |
-
-**Request Headers**
-```
-If-None-Match: "config-etag-value"
-```
-
-**Response** (HTTP 200)
-
-VLESS/VMess example:
+**Example Response**
 ```json
 {
   "node_type": "vless",
   "server_port": 443,
-  "network": "tcp",
-  "networkSettings": {},
+  "server_name": "example.com",
   "tls": 1,
-  "tls_settings": {
-    "server_name": "example.com"
-  },
-  "security_settings": {
-    "public_key": "...",
-    "short_id": "..."
-  }
+  "network": "tcp"
 }
 ```
 
-Trojan example:
-```json
-{
-  "node_type": "trojan",
-  "server_port": 443,
-  "host": "example.com",
-  "server_name": "example.com"
-}
-```
+**User List** (`action=user`)
 
-Shadowsocks example:
-```json
-{
-  "node_type": "shadowsocks",
-  "server_port": 8388,
-  "cipher": "2022-blake3-aes-128-gcm",
-  "server_key": "base64_encoded_key"
-}
-```
-
-**Response Headers**
-```
-Content-Type: application/json
-ETag: "config-etag-value"
-```
-
-**Caching**: Implement ETag support to minimize unnecessary configuration reloads.
-
-#### GET /api?action=user
-
-Retrieves active user list with associated limits.
-
-**Request Headers**
-```
-If-None-Match: "users-etag-value"
-```
-
-**Response** (HTTP 200)
 ```json
 {
   "users": [
@@ -286,216 +299,62 @@ If-None-Match: "users-etag-value"
       "speed_limit": 100,
       "device_limit": 3,
       "conn_limit": 50
-    },
-    {
-      "id": 1002,
-      "uuid": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
-      "speed_limit": 0,
-      "device_limit": 0,
-      "conn_limit": 0
     }
   ]
 }
 ```
 
-**Field Specifications**
-
-| Field         | Type   | Required | Description                                  |
-|---------------|--------|----------|----------------------------------------------|
-| `id`          | int    | Yes      | Unique user identifier                       |
-| `uuid`        | string | Yes      | User UUID (RFC 4122 format)                  |
-| `speed_limit` | int    | No       | Bandwidth limit in Mbps (0 = unlimited)      |
-| `device_limit`| int    | No       | Maximum concurrent devices (0 = unlimited)   |
-| `conn_limit`  | int    | No       | Maximum concurrent connections (0 = unlimited)|
-
-**Notes**:
-- Users with limits set to 0 or omitted fields will have no restrictions
-- User list changes are detected automatically and applied without restart
-- When limits change, existing connections remain active but new connections use updated limits
-
-#### GET /api?action=alivelist
-
-Retrieves current online device counts for device limit enforcement.
-
-**Response** (HTTP 200)
-```json
-{
-  "alive": {
-    "1001": 2,
-    "1002": 1,
-    "1003": 0
-  }
-}
-```
-
-**Field Specifications**
-
-| Field   | Type   | Description                                           |
-|---------|--------|-------------------------------------------------------|
-| `alive` | object | Map of user IDs to current online device count        |
-
-**Usage**: v2sp compares reported device counts against `device_limit` to enforce restrictions.
-
-#### POST /api?action=push
-
-Reports user traffic consumption for billing and quota enforcement.
-
-**Request Body**
-```json
-{
-  "1001": [104857600, 209715200],
-  "1002": [52428800, 104857600]
-}
-```
-
-**Format**: `{ "user_id": [upload_bytes, download_bytes] }`
-
-**Response** (HTTP 200)
-```json
-{
-  "message": "ok"
-}
-```
-
-**Implementation Notes**:
-- Traffic is reported periodically (default: 60 seconds)
-- Implement idempotency to handle duplicate reports
-- Use database transactions to ensure atomic updates
-- Values are in bytes and represent cumulative traffic since last report
-
-#### POST /api?action=alive
-
-Reports currently online user IPs for real-time monitoring and device tracking.
-
-**Request Body**
-```json
-{
-  "1001": ["1.2.3.4", "5.6.7.8"],
-  "1002": ["9.10.11.12"]
-}
-```
-
-**Format**: `{ "user_id": ["ip1", "ip2", ...] }`
-
-**Response** (HTTP 200)
-```json
-{
-  "message": "ok"
-}
-```
-
-**Implementation Notes**:
-- Reported every 60 seconds by default
-- IPs are deduplicated on backend
-- Implement expiry mechanism (recommend 5-minute TTL)
-- Supports both IPv4 and IPv6 addresses
-
-### Error Handling
-
-**Common Error Codes**
-
-| Status | Meaning                | Action                                        |
-|--------|------------------------|-----------------------------------------------|
-| 400    | Bad Request            | Check request format and parameters           |
-| 401    | Unauthorized           | Verify API token                              |
-| 403    | Forbidden              | Node may be disabled                          |
-| 404    | Not Found              | Node ID doesn't exist                         |
-| 500    | Internal Server Error  | Check panel logs                              |
-| 502    | Bad Gateway            | Panel backend is down                         |
-| 503    | Service Unavailable    | Panel is under maintenance                    |
-
-**Error Response Format**
-```json
-{
-  "message": "Detailed error description",
-  "code": "ERROR_CODE",
-  "details": {}
-}
-```
-
-### API Implementation Checklist
-
-When implementing panel API endpoints, ensure:
-
-**Response Format**
-- [ ] Content-Type header set to `application/json`
-- [ ] Character encoding is UTF-8
-- [ ] JSON is properly formatted (use `json_encode()`, `JSON.stringify()`, etc.)
-- [ ] Field names use snake_case (not camelCase)
-
-**HTTP Semantics**
-- [ ] Correct status codes (200, 304, 4xx, 5xx)
-- [ ] ETag support for caching (recommended)
-- [ ] If-None-Match request header handling
-- [ ] Proper error messages in response body
-
-**Data Validation**
-- [ ] Type safety (id as int, uuid as string, etc.)
-- [ ] UUID format validation (RFC 4122)
-- [ ] Limit values are non-negative integers
-- [ ] Required fields are always present
-
-**Security**
-- [ ] API token validation on every request
-- [ ] Rate limiting to prevent abuse
-- [ ] SQL injection prevention
-- [ ] Input sanitization
-
-**Performance**
-- [ ] Database query optimization
-- [ ] Connection pooling
-- [ ] Response caching where appropriate
-- [ ] Efficient JSON encoding
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | int | Unique user ID |
+| `uuid` | string | User UUID |
+| `speed_limit` | int | Speed limit in Mbps (0 = unlimited) |
+| `device_limit` | int | Max devices (0 = unlimited) |
+| `conn_limit` | int | Max connections (0 = unlimited) |
 
 ## Configuration
 
-### Core Configuration
+### Example Configuration
 
-The main configuration file (`config.json`) defines logging, core settings, and node configurations.
-
-**Example Configuration**
 ```json
 {
   "Log": {
-    "Level": "info",
-    "Output": "/var/log/v2sp/v2sp.log"
+    "Level": "error",
+    "Output": ""
   },
   "Cores": [
     {
       "Type": "xray",
       "Log": {
-        "Level": "warning"
+        "Level": "error",
+        "ErrorPath": "/etc/v2sp/error.log"
       },
-      "AssetPath": "/etc/v2sp/",
-      "DnsConfigPath": "/etc/v2sp/dns.json",
+      "OutboundConfigPath": "/etc/v2sp/custom_outbound.json",
       "RouteConfigPath": "/etc/v2sp/route.json"
+    },
+    {
+      "Type": "hysteria2",
+      "Log": {
+        "Level": "error",
+        "ErrorPath": "/etc/v2sp/hy2_error.log"
+      },
+      "BinaryPath": "/usr/local/bin/hysteria",
+      "ConfigDir": "/etc/v2sp/hy2"
     }
   ],
   "Nodes": [
     {
-      "ApiHost": "https://panel.example.com",
-      "ApiKey": "your_secure_api_key",
+      "ApiHost": "https://panel.example.com/api",
+      "ApiKey": "your_api_key",
       "NodeID": 1,
       "Timeout": 30,
       "ListenIP": "0.0.0.0",
       "SendIP": "0.0.0.0",
-      "DeviceOnlineMinTraffic": 200,
-      "EnableXTLS": true,
-      "EnableVless": true,
       "CertConfig": {
-        "CertMode": "dns",
+        "CertMode": "http",
         "CertDomain": "node1.example.com",
-        "Provider": "cloudflare",
-        "Email": "admin@example.com",
-        "DNSEnv": {
-          "CF_DNS_API_TOKEN": "your_cloudflare_token"
-        }
-      },
-      "LimitConfig": {
-        "EnableDynamicSpeedLimit": false,
-        "SpeedLimit": 0,
-        "DeviceLimit": 0,
-        "ConnLimit": 0
+        "CertFile": "/etc/v2sp/cert/node1.example.com.crt",
+        "KeyFile": "/etc/v2sp/cert/node1.example.com.key"
       }
     }
   ]
@@ -504,89 +363,74 @@ The main configuration file (`config.json`) defines logging, core settings, and 
 
 ### Configuration Reference
 
-**Log Options**
+**Xray Core Options**
 
-| Field    | Type   | Default | Description                                |
-|----------|--------|---------|------------------------------------------|
-| `Level`  | string | `info`  | Log level: debug, info, warning, error   |
-| `Output` | string | stdout  | Log file path or empty for stdout        |
+| Field | Type | Description |
+|-------|------|-------------|
+| `Type` | string | Must be "xray" |
+| `OutboundConfigPath` | string | Path to outbound config (auto-created if missing) |
+| `RouteConfigPath` | string | Path to route config (auto-created if missing) |
+| `AssetPath` | string | Path to geoip.dat and geosite.dat |
 
-**Node Options**
+**Hysteria2 Core Options**
 
-| Field                      | Type    | Required | Description                                    |
-|----------------------------|---------|----------|------------------------------------------------|
-| `Core`                     | string  | No       | Core type, defaults to "xray"                  |
-| `ApiHost`                  | string  | Yes      | Panel API base URL                             |
-| `ApiKey`                   | string  | Yes      | API authentication token                       |
-| `NodeID`                   | int     | Yes      | Unique node identifier                         |
-| `NodeType`                 | string  | No       | Protocol (auto-detected from API if omitted)   |
-| `Timeout`                  | int     | No       | API request timeout in seconds (default: 30)   |
-| `ListenIP`                 | string  | No       | Listening address (default: 0.0.0.0)           |
-| `SendIP`                   | string  | No       | Outbound source IP (default: 0.0.0.0)          |
-| `DeviceOnlineMinTraffic`   | int     | No       | Minimum traffic (KB) to count as online        |
-| `EnableXTLS`               | bool    | No       | Enable XTLS support                            |
-| `EnableVless`              | bool    | No       | Enable VLESS protocol                          |
+| Field | Type | Description |
+|-------|------|-------------|
+| `Type` | string | Must be "hysteria2" |
+| `BinaryPath` | string | Path to hysteria binary (default: /usr/local/bin/hysteria) |
+| `ConfigDir` | string | Directory for node configs (default: /etc/v2sp/hy2) |
 
-**Certificate Configuration**
+**Certificate Options**
 
-| Field        | Type   | Description                                        |
-|--------------|--------|----------------------------------------------------|
-| `CertMode`   | string | Certificate mode: none, file, http, dns, self      |
-| `CertDomain` | string | Domain name for certificate                        |
-| `CertFile`   | string | Path to certificate file (file mode)               |
-| `KeyFile`    | string | Path to private key file (file mode)               |
-| `Provider`   | string | DNS provider name (dns mode)                       |
-| `Email`      | string | ACME account email                                 |
-| `DNSEnv`     | object | DNS provider credentials                           |
+| Field | Type | Description |
+|-------|------|-------------|
+| `CertMode` | string | none, file, http, dns, self |
+| `CertDomain` | string | Domain for certificate |
+| `CertFile` | string | Certificate file path |
+| `KeyFile` | string | Private key file path |
+| `Provider` | string | DNS provider (for dns mode) |
+| `DNSEnv` | object | DNS provider credentials |
 
-**Limit Configuration**
+### Auto-Created Files
 
-| Field                      | Type | Description                                     |
-|----------------------------|------|-------------------------------------------------|
-| `EnableDynamicSpeedLimit`  | bool | Enable dynamic speed adjustment                 |
-| `SpeedLimit`               | int  | Node-level speed limit in Mbps (0 = unlimited)  |
-| `DeviceLimit`              | int  | Node-level device limit (0 = unlimited)         |
-| `ConnLimit`                | int  | Node-level connection limit (0 = unlimited)     |
+When v2sp starts, it automatically creates missing configuration files:
 
-### DNS Configuration
-
-Custom DNS rules can be defined in `dns.json`:
-
+**route.json** (default routing rules)
 ```json
 {
-  "servers": [
-    {
-      "address": "223.5.5.5",
-      "domains": ["geosite:cn"]
-    },
-    {
-      "address": "8.8.8.8",
-      "domains": ["geosite:geolocation-!cn"]
-    }
+  "domainStrategy": "AsIs",
+  "rules": [
+    {"outboundTag": "block", "ip": ["geoip:private"]},
+    {"outboundTag": "block", "ip": ["127.0.0.0/8", "10.0.0.0/8", ...]},
+    {"outboundTag": "IPv4_out", "network": "udp,tcp"}
   ]
 }
 ```
 
-### Routing Configuration
-
-Traffic routing rules can be defined in `route.json`:
-
+**custom_outbound.json** (default outbounds)
 ```json
-{
-  "domainStrategy": "IPIfNonMatch",
-  "rules": [
-    {
-      "type": "field",
-      "domain": ["geosite:cn"],
-      "outboundTag": "direct"
-    },
-    {
-      "type": "field",
-      "ip": ["geoip:cn", "geoip:private"],
-      "outboundTag": "direct"
-    }
-  ]
-}
+[
+  {"tag": "IPv4_out", "protocol": "freedom"},
+  {"tag": "IPv6_out", "protocol": "freedom"},
+  {"tag": "block", "protocol": "blackhole"}
+]
+```
+
+**Hysteria2 node configs** (per-node YAML)
+```yaml
+listen: ":443"
+tls:
+  cert: /etc/v2sp/cert/domain.crt
+  key: /etc/v2sp/cert/domain.key
+auth:
+  type: userpass
+  userpass:
+    uuid1: uuid1
+    uuid2: uuid2
+acl:
+  inline:
+    - reject(geoip:private)
+    - direct(all)
 ```
 
 ## Building from Source
@@ -595,273 +439,97 @@ Traffic routing rules can be defined in `route.json`:
 
 - Go 1.21 or later
 - Git
-- Make (optional)
 
 ### Build Commands
 
-**Local Build**
 ```bash
-go build -trimpath -ldflags "-s -w" -o v2sp
-```
+# Linux AMD64
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o v2sp-linux-amd64 ./main.go
 
-**Cross-Compilation**
-
-Linux AMD64 (most common for servers):
-```bash
-GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid=" -o v2sp-linux-amd64
-```
-
-Linux ARM64 (ARM-based servers):
-```bash
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -buildid=" -o v2sp-linux-arm64
-```
-
-**Build Flags Explained**
-
-- `-trimpath`: Remove file system paths from binary for reproducible builds
-- `-ldflags "-s -w"`: Strip debugging information to reduce binary size
-- `-buildid=""`: Remove build ID for reproducible builds
-
-### Release Process
-
-Create a new release using the provided script:
-
-```bash
-./scripts/release.sh v1.0.0 "Release description"
-```
-
-The script performs the following:
-1. Validates working directory is clean
-2. Pushes latest changes to main branch
-3. Creates and pushes Git tag
-4. Triggers GitHub Actions workflow for automated builds
-5. Optionally creates GitHub Release (requires `gh` CLI)
-
-## Deployment
-
-### Systemd Service
-
-v2sp includes a systemd service file for production deployments:
-
-```ini
-[Unit]
-Description=v2sp Multi-Node Backend
-After=network.target
-
-[Service]
-Type=simple
-User=nobody
-ExecStart=/usr/local/bin/v2sp run -c /etc/v2sp/config.json
-ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
-RestartSec=10s
-LimitNOFILE=1000000
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Service Management**
-```bash
-systemctl enable v2sp
-systemctl start v2sp
-systemctl status v2sp
-systemctl reload v2sp  # Reload configuration without downtime
-```
-
-### Docker Deployment
-
-**Dockerfile**
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /build
-COPY . .
-RUN go build -trimpath -ldflags "-s -w" -o v2sp
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates tzdata
-COPY --from=builder /build/v2sp /usr/local/bin/
-ENTRYPOINT ["/usr/local/bin/v2sp"]
-CMD ["run", "-c", "/etc/v2sp/config.json"]
-```
-
-**Docker Compose**
-```yaml
-version: '3.8'
-services:
-  v2sp:
-    image: ghcr.io/nsevo/v2sp:latest
-    container_name: v2sp
-    restart: unless-stopped
-    volumes:
-      - ./config:/etc/v2sp
-      - ./logs:/var/log/v2sp
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-```
-
-### Production Considerations
-
-**Security**
-- Run as non-privileged user
-- Use firewall rules to restrict access
-- Keep API keys secure and rotate regularly
-- Enable TLS for panel API communication
-- Regularly update to latest stable version
-
-**Performance**
-- Allocate sufficient file descriptors (`LimitNOFILE`)
-- Monitor memory usage and set appropriate limits
-- Use SSD storage for high-traffic nodes
-- Consider using CDN for certificate provisioning
-- Enable kernel TCP optimizations
-
-**Monitoring**
-- Set up log aggregation (e.g., ELK, Loki)
-- Monitor system metrics (CPU, memory, network)
-- Track traffic anomalies
-- Set up alerting for service failures
-- Regular backup of configuration files
-
-## Development
-
-### Project Structure
-
-```
-v2sp/
-├── api/            # Panel API client implementation
-├── cmd/            # CLI commands and entry point
-├── common/         # Shared utilities (crypto, task, format)
-├── conf/           # Configuration structures and validation
-├── core/           # Xray core integration
-│   └── xray/       # Xray-specific implementation
-│       └── app/    # Custom dispatcher and components
-├── limiter/        # Rate limiting and connection management
-├── node/           # Node controller and lifecycle management
-└── example/        # Example configuration files
-```
-
-### Code Architecture
-
-**Dependency Flow**
-```
-main.go
-  ↓
-cmd/
-  ↓
-node/Controller
-  ├→ api/Client (panel communication)
-  ├→ core/Xray (protocol handling)
-  ├→ limiter/Limiter (rate/device/connection limits)
-  └→ common/Counter (traffic accounting)
-```
-
-### Contributing
-
-Contributions are welcome. Please follow these guidelines:
-
-**Code Style**
-- Follow Go standard formatting (`gofmt`)
-- Use meaningful variable and function names
-- Add comments for exported functions
-- Keep functions focused and testable
-
-**Pull Request Process**
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with clear commit messages
-4. Ensure all tests pass
-5. Update documentation if needed
-6. Submit pull request with detailed description
-
-**Testing**
-```bash
-# Run unit tests
-go test ./...
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run tests with race detector
-go test -race ./...
+# Linux ARM64
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o v2sp-linux-arm64 ./main.go
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Problem**: Connection refused when connecting to panel API
+**Single node failure crashes service**
+- Update to v1.4.3+ which includes independent node operation
+- Failed nodes are now skipped, others continue
 
-**Solution**: 
-- Verify `ApiHost` is correct and accessible
-- Check firewall rules
-- Ensure panel API is running
-- Verify API token is valid
+**API 500 errors causing service restart**
+- Update to v1.4.3+ which includes fault-tolerant API handling
+- Transient errors are logged and retried automatically
 
-**Problem**: Users not showing up in node
+**Certificate request fails**
+- Ensure `CertFile` and `KeyFile` paths are specified (even for http mode)
+- Create `/etc/v2sp/cert/` directory
+- Verify port 80 is accessible (for http mode)
 
-**Solution**:
-- Check API response format matches specification
-- Verify user list endpoint returns correct JSON
-- Check v2sp logs for API errors
-- Ensure user UUIDs are valid RFC 4122 format
-
-**Problem**: Speed limit not working
-
-**Solution**:
-- Verify `speed_limit` values are in Mbps (not Bps)
-- Check if node-level speed limit overrides user limits
-- Ensure rate limiting is enabled in configuration
-- Monitor system resources (CPU/memory)
-
-**Problem**: Certificate renewal fails
-
-**Solution**:
-- Verify DNS provider credentials are correct
-- Check domain ownership
-- Ensure port 80/443 are accessible (http mode)
-- Review ACME account status
+**Hysteria2 node not starting**
+- Ensure `/usr/local/bin/hysteria` exists and is executable
+- Check `/etc/v2sp/hy2/` directory is writable
+- Verify TLS certificate is valid
 
 ### Debug Mode
-
-Enable detailed logging for troubleshooting:
 
 ```json
 {
   "Log": {
-    "Level": "debug",
-    "Output": "/var/log/v2sp/debug.log"
+    "Level": "debug"
   }
 }
 ```
 
-## Credits
+## Version History
 
-v2sp is built upon the excellent work of the following projects:
+### v1.4.4
+- Added Hysteria2 port hopping support
+- Automatic iptables rule management (create, cleanup, restart-safe)
+- IPv4 and IPv6 port hopping support
+- Stale rule cleanup on service start
+
+### v1.4.3
+- Independent node operation - single node failure doesn't affect others
+- Removed Panic calls, replaced with graceful error handling
+- API communication failures handled with automatic retry
+- Improved stability for multi-node deployments
+
+### v1.4.2
+- Fixed Hysteria2 config filename sanitization
+- Support special characters in node tags
+
+### v1.4.1
+- Fixed node type validation for hysteria2
+- Allow empty Core field in node options
+
+### v1.4.0
+- Added Hysteria2 support (subprocess mode)
+- Multi-core architecture with automatic core selection
+- Auto-create missing configuration files
+- Certificate path auto-configuration in initconfig.sh
+
+## Credits
 
 **Core Projects**
 - [XTLS/Xray-core](https://github.com/XTLS/Xray-core) - High-performance proxy platform
-- [v2fly/v2ray-core](https://github.com/v2fly/v2ray-core) - Platform for building proxies
+- [apernet/hysteria](https://github.com/apernet/hysteria) - Hysteria2 protocol implementation
 
-**Inspiration & Reference**
-- [XrayR](https://github.com/XrayR-project/XrayR) - Xray backend for V2board and other panels
-- [V2bX](https://github.com/wyx2685/V2bX) - Multi-protocol backend implementation
-- [SagerNet/sing-box](https://github.com/SagerNet/sing-box) - Universal proxy platform
+**Inspiration**
+- [XrayR](https://github.com/XrayR-project/XrayR) - Xray backend reference
+- [V2bX](https://github.com/wyx2685/V2bX) - Multi-protocol backend
 
 **Infrastructure**
 - [go-acme/lego](https://github.com/go-acme/lego) - ACME client library
 - [spf13/cobra](https://github.com/spf13/cobra) - CLI framework
-- [sirupsen/logrus](https://github.com/sirupsen/logrus) - Structured logging
-
-Special thanks to all contributors and users who have provided feedback, bug reports, and feature suggestions.
 
 ## License
 
-This project is provided as-is for educational and self-hosting purposes. Please review and comply with local regulations regarding proxy services.
+This project is provided as-is for educational and self-hosting purposes.
 
 ## Links
 
-- Documentation: [GitHub Wiki](https://github.com/nsevo/v2sp/wiki)
-- Issue Tracker: [GitHub Issues](https://github.com/nsevo/v2sp/issues)
-- Star History: [Star Chart](https://starchart.cc/nsevo/v2sp)
+- Repository: [github.com/nsevo/v2sp](https://github.com/nsevo/v2sp)
+- Scripts: [github.com/nsevo/v2sp-script](https://github.com/nsevo/v2sp-script)
+- Issues: [GitHub Issues](https://github.com/nsevo/v2sp/issues)

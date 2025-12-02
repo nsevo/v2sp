@@ -34,6 +34,7 @@ type Hy2 struct {
 	configGen  *ConfigGenerator
 	binaryPath string
 	nodes      sync.Map // tag -> *Hy2Node
+	iptables   *IPTablesManager
 }
 
 // New creates a new Hy2 core
@@ -66,12 +67,21 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 		config:     cfg,
 		configGen:  configGen,
 		binaryPath: binaryPath,
+		iptables:   NewIPTablesManager(),
 	}, nil
 }
 
 // Start starts the Hy2 core
 func (h *Hy2) Start() error {
 	log.Info("Hysteria2 Core (subprocess mode) started")
+
+	// Clean up any stale iptables rules from previous runs
+	if HasIPTablesCapability() {
+		log.Info("Cleaning up stale port hopping rules...")
+		h.iptables.CleanupAllRules()
+	} else {
+		log.Warn("iptables not available, port hopping will not work")
+	}
 
 	// Check binary exists
 	if !CheckBinaryExistsAt(h.binaryPath) {
@@ -98,6 +108,12 @@ func (h *Hy2) Close() error {
 		}
 		return true
 	})
+
+	// Cleanup all iptables rules
+	if HasIPTablesCapability() {
+		log.Info("Cleaning up port hopping iptables rules...")
+		h.iptables.CleanupAllRules()
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing nodes: %v", errs)
@@ -156,6 +172,33 @@ func (h *Hy2) AddNode(tag string, info *panel.NodeInfo, option *conf.Options) er
 	if info.Common != nil {
 		port = info.Common.ServerPort
 	}
+
+	// Setup port hopping iptables rules if enabled
+	// Port hopping is detected by PortRange field (e.g., "20000-50000")
+	if info.Hysteria2 != nil {
+		enabled, startPort, endPort := info.Hysteria2.GetPortHoppingConfig()
+		if enabled {
+			phConfig := &PortHoppingConfig{
+				Enabled:    true,
+				StartPort:  startPort,
+				EndPort:    endPort,
+				ListenPort: port,
+			}
+			if err := h.iptables.AddPortHopping(tag, phConfig); err != nil {
+				log.WithFields(log.Fields{
+					"tag":   tag,
+					"range": fmt.Sprintf("%d-%d", startPort, endPort),
+					"err":   err,
+				}).Warn("Failed to setup port hopping, continuing without it")
+			} else {
+				log.WithFields(log.Fields{
+					"tag":   tag,
+					"range": fmt.Sprintf("%d-%d -> %d", startPort, endPort, port),
+				}).Info("Port hopping enabled")
+			}
+		}
+	}
+
 	log.WithFields(log.Fields{
 		"tag":  tag,
 		"port": port,
@@ -179,6 +222,16 @@ func (h *Hy2) DelNode(tag string) error {
 	// Stop process
 	if err := node.Process.Stop(); err != nil {
 		log.WithField("tag", tag).WithError(err).Warn("Error stopping process")
+	}
+
+	// Remove port hopping iptables rules if enabled
+	if node.NodeInfo.Hysteria2 != nil {
+		enabled, _, _ := node.NodeInfo.Hysteria2.GetPortHoppingConfig()
+		if enabled {
+			if err := h.iptables.RemovePortHopping(tag); err != nil {
+				log.WithField("tag", tag).WithError(err).Warn("Error removing port hopping rules")
+			}
+		}
 	}
 
 	// Delete config file

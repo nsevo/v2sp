@@ -137,6 +137,53 @@ type Hysteria2Node struct {
 	DownMbps     int    `json:"down_mbps"`
 	Obfs         string `json:"obfs"`
 	ObfsPassword string `json:"obfs_password"`
+	// Port can be single port (443) or range string ("20000-50000")
+	PortRange string `json:"-"` // Parsed from server_port if it's a range
+}
+
+// ParsePortConfig parses the server_port field which can be int or string range
+func (h *Hysteria2Node) ParsePortConfig(serverPort interface{}) {
+	switch v := serverPort.(type) {
+	case float64:
+		// Single port number
+		h.ServerPort = int(v)
+		h.PortRange = ""
+	case string:
+		// Could be "443" or "20000-50000"
+		if strings.Contains(v, "-") {
+			// Range format: "20000-50000"
+			h.PortRange = v
+			// Parse first port as listen port
+			parts := strings.Split(v, "-")
+			if len(parts) == 2 {
+				if port, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+					h.ServerPort = port
+				}
+			}
+		} else {
+			// Single port as string: "443"
+			if port, err := strconv.Atoi(v); err == nil {
+				h.ServerPort = port
+			}
+		}
+	}
+}
+
+// GetPortHoppingConfig returns port hopping configuration if enabled
+func (h *Hysteria2Node) GetPortHoppingConfig() (enabled bool, startPort, endPort int) {
+	if h.PortRange == "" || !strings.Contains(h.PortRange, "-") {
+		return false, 0, 0
+	}
+	parts := strings.Split(h.PortRange, "-")
+	if len(parts) != 2 {
+		return false, 0, 0
+	}
+	start, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	end, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || start >= end {
+		return false, 0, 0
+	}
+	return true, start, end
 }
 
 type RawDNS struct {
@@ -276,6 +323,13 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		err = json.Unmarshal(r.Body(), rsp)
 		if err != nil {
 			return nil, fmt.Errorf("decode hysteria2 params error: %s", err)
+		}
+		// Parse server_port which can be int or string range
+		var rawConfig map[string]interface{}
+		if err := json.Unmarshal(r.Body(), &rawConfig); err == nil {
+			if sp, ok := rawConfig["server_port"]; ok {
+				rsp.ParsePortConfig(sp)
+			}
 		}
 		cm = &rsp.CommonNode
 		node.Hysteria2 = rsp
