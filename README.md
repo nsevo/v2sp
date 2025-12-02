@@ -56,9 +56,7 @@ The installation script will:
 After installation, generate node configuration:
 
 ```bash
-v2sp config
-# Or run the script directly:
-bash /path/to/initconfig.sh
+v2sp config init
 ```
 
 The generator will:
