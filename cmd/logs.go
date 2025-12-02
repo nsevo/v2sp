@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/nsevo/v2sp/cmd/ui"
 	"github.com/spf13/cobra"
@@ -33,21 +35,24 @@ func init() {
 }
 
 func logsHandle(_ *cobra.Command, _ []string) {
-	// 构建 journalctl 命令
-	args := []string{"-u", "v2sp", "-n", fmt.Sprintf("%d", logLines), "--no-pager"}
-	
+	if _, err := exec.LookPath("journalctl"); err != nil {
+		fmt.Println("journalctl not found. v2sp logs works on Linux with systemd.")
+		return
+	}
+
+	// 构建 journalctl 命令 - 按时间正序显示
+	args := []string{
+		"-u", "v2sp",
+		"-n", fmt.Sprintf("%d", logLines),
+		"--no-pager",
+		"--output=short-iso", // 标准 ISO 时间格式
+	}
+
 	if followLogs {
 		args = append(args, "-f")
-	}
-
-	// 级别过滤
-	var grepArgs []string
-	if logLevel != "" {
-		grepArgs = []string{"grep", "-i", "--line-buffered", strings.ToUpper(logLevel)}
-	}
-
-	// 显示简单头部
-	if !followLogs {
+		fmt.Println("Following logs (Ctrl+C to exit)...")
+		fmt.Println(strings.Repeat("─", 60))
+	} else {
 		fmt.Printf("Logs (last %d lines)\n", logLines)
 		if logLevel != "" {
 			fmt.Printf("Filter: %s\n", logLevel)
@@ -55,77 +60,80 @@ func logsHandle(_ *cobra.Command, _ []string) {
 		fmt.Println(strings.Repeat("─", 60))
 	}
 
-	// 执行命令
+	// 创建命令
 	cmd := exec.Command("journalctl", args...)
-	
-	if len(grepArgs) > 0 && followLogs {
-		// 使用管道过滤
-		grep := exec.Command(grepArgs[0], grepArgs[1:]...)
-		
-		pipe, err := cmd.StdoutPipe()
-		if err != nil {
-			fmt.Println(ui.Error("Failed to create pipe: " + err.Error()))
-			return
+
+	// 设置标准输出和错误输出
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Println(ui.Error("Failed to create pipe: " + err.Error()))
+		return
+	}
+
+	// 启动命令
+	if err := cmd.Start(); err != nil {
+		fmt.Println(ui.Error("Failed to start journalctl: " + err.Error()))
+		return
+	}
+
+	// 设置信号处理（Ctrl+C）
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// 创建完成通道
+	done := make(chan bool)
+
+	// 读取输出
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// 级别过滤
+			if logLevel != "" {
+				levelUpper := strings.ToUpper(logLevel)
+				if !strings.Contains(strings.ToUpper(line), levelUpper) {
+					continue
+				}
+			}
+
+			// 格式化输出
+			printLogLine(line)
 		}
-		
-		grep.Stdin = pipe
-		grep.Stdout = os.Stdout
-		grep.Stderr = os.Stderr
-		
-		if err := cmd.Start(); err != nil {
-			fmt.Println(ui.Error("Failed to start journalctl: " + err.Error()))
-			return
-		}
-		
-		if err := grep.Start(); err != nil {
-			fmt.Println(ui.Error("Failed to start grep: " + err.Error()))
-			return
-		}
-		
+		done <- true
+	}()
+
+	// 等待完成或中断
+	select {
+	case <-done:
 		cmd.Wait()
-		grep.Wait()
-	} else {
-		// 直接输出
-		output, err := cmd.Output()
-		if err != nil {
-			fmt.Println(ui.Error("Failed to read logs"))
-			return
+	case <-sigChan:
+		// 收到 Ctrl+C，终止进程
+		if cmd.Process != nil {
+			cmd.Process.Kill()
 		}
-		
-		// 格式化输出
-		formatAndPrint(string(output), logLevel)
-		
-		if !followLogs {
-			fmt.Println(strings.Repeat("─", 60))
-			fmt.Println("Tip: v2sp logs -f (follow) | v2sp logs -l error (filter)")
-		}
+		fmt.Println("\n" + strings.Repeat("─", 60))
+		fmt.Println("Interrupted")
+	}
+
+	if !followLogs {
+		fmt.Println(strings.Repeat("─", 60))
+		fmt.Println("Tip: v2sp logs -f (follow) | v2sp logs -l error (filter)")
 	}
 }
 
-func formatAndPrint(logs, levelFilter string) {
-	scanner := bufio.NewScanner(strings.NewReader(logs))
-	
-	for scanner.Scan() {
-		line := scanner.Text()
-		
-		// 级别过滤
-		if levelFilter != "" {
-			if !strings.Contains(strings.ToUpper(line), strings.ToUpper(levelFilter)) {
-				continue
-			}
-		}
-		
-		// 简单高亮
-		if strings.Contains(line, "ERROR") || strings.Contains(line, "error") {
-			fmt.Print(ui.ErrorStyle.Render("• "))
-		} else if strings.Contains(line, "WARN") || strings.Contains(line, "warning") {
-			fmt.Print(ui.WarningStyle.Render("• "))
-		} else if strings.Contains(line, "INFO") || strings.Contains(line, "info") {
-			fmt.Print(ui.DimStyle.Render("• "))
-		} else {
-			fmt.Print("  ")
-		}
-		
-		fmt.Println(line)
+func printLogLine(line string) {
+	// 简单的级别高亮
+	prefix := "  "
+
+	lineUpper := strings.ToUpper(line)
+	if strings.Contains(lineUpper, "ERROR") {
+		prefix = ui.ErrorStyle.Render("✗ ")
+	} else if strings.Contains(lineUpper, "WARN") {
+		prefix = ui.WarningStyle.Render("! ")
+	} else if strings.Contains(lineUpper, "INFO") {
+		prefix = ui.InfoStyle.Render("• ")
 	}
+
+	fmt.Println(prefix + line)
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	osexec "os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,10 +32,11 @@ func menuHandle(_ *cobra.Command, _ []string) {
 }
 
 type MenuItem struct {
-	Key       string
-	Title     string
-	Action    func() tea.Msg
-	Condition func() bool
+	Key         string
+	Title       string
+	Description string
+	Action      func() tea.Msg
+	Condition   func() bool
 }
 
 type model struct {
@@ -52,58 +54,122 @@ func initialModel() model {
 func getMenuItems() []MenuItem {
 	return []MenuItem{
 		{
-			Key:   "1",
-			Title: "Start",
-			Action: startServiceAction,
+			Key:         "1",
+			Title:       "Start",
+			Description: "systemctl start v2sp",
+			Action:      startServiceAction,
 			Condition: func() bool {
 				running, _ := checkRunning()
 				return !running
 			},
 		},
 		{
-			Key:   "2",
-			Title: "Stop",
-			Action: stopServiceAction,
+			Key:         "2",
+			Title:       "Stop",
+			Description: "systemctl stop v2sp",
+			Action:      stopServiceAction,
 			Condition: func() bool {
 				running, _ := checkRunning()
 				return running
 			},
 		},
 		{
-			Key:       "3",
-			Title:     "Restart",
-			Action:    restartServiceAction,
-			Condition: func() bool { return true },
+			Key:         "3",
+			Title:       "Restart",
+			Description: "systemctl restart v2sp",
+			Action:      restartServiceAction,
+			Condition:   func() bool { return true },
 		},
 		{
-			Key:       "s",
-			Title:     "Status",
-			Action:    statusAction,
-			Condition: func() bool { return true },
+			Key:         "4",
+			Title:       "Status",
+			Description: "v2sp status",
+			Action:      statusAction,
+			Condition:   func() bool { return true },
 		},
 		{
-			Key:       "l",
-			Title:     "Logs",
-			Action:    logsAction,
-			Condition: func() bool { return true },
+			Key:         "5",
+			Title:       "Logs (follow)",
+			Description: "v2sp logs -f",
+			Action:      logsAction,
+			Condition:   func() bool { return true },
 		},
 		{
-			Key:       "c",
-			Title:     "Config",
-			Action:    editConfigAction,
-			Condition: func() bool { return true },
+			Key:         "6",
+			Title:       "Logs (error)",
+			Description: "v2sp logs -l error",
+			Action:      logsErrorAction,
+			Condition:   func() bool { return true },
 		},
 		{
-			Key:       "h",
-			Title:     "Health",
-			Action:    healthCheckAction,
-			Condition: func() bool { return true },
+			Key:         "7",
+			Title:       "Health",
+			Description: "v2sp health",
+			Action:      healthCheckAction,
+			Condition:   func() bool { return true },
 		},
 		{
-			Key:       "q",
-			Title:     "Quit",
-			Action:    func() tea.Msg { return tea.Quit() },
-			Condition: func() bool { return true },
+			Key:         "8",
+			Title:       "Config init",
+			Description: "v2sp config init",
+			Action:      configInitAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "9",
+			Title:       "Config show",
+			Description: "v2sp config show",
+			Action:      configShowAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "0",
+			Title:       "Config validate",
+			Description: "v2sp config validate",
+			Action:      configValidateAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "c",
+			Title:       "Edit config",
+			Description: "edit /etc/v2sp/config.json",
+			Action:      editConfigAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "y",
+			Title:       "System setup",
+			Description: "v2sp system setup",
+			Action:      systemSetupAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "t",
+			Title:       "Sync time",
+			Description: "v2sp synctime",
+			Action:      syncTimeAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "k",
+			Title:       "X25519 key",
+			Description: "v2sp x25519",
+			Action:      x25519Action,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "v",
+			Title:       "Version",
+			Description: "v2sp version",
+			Action:      versionAction,
+			Condition:   func() bool { return true },
+		},
+		{
+			Key:         "q",
+			Title:       "Quit",
+			Description: "Exit menu",
+			Action:      func() tea.Msg { return tea.Quit() },
+			Condition:   func() bool { return true },
 		},
 	}
 }
@@ -177,7 +243,7 @@ func (m model) View() string {
 	var s strings.Builder
 
 	running, _ := checkRunning()
-	
+
 	s.WriteString("\n")
 	s.WriteString(strings.Repeat("─", 50))
 	s.WriteString("\n")
@@ -200,10 +266,15 @@ func (m model) View() string {
 			cursor = ui.InfoStyle.Render("> ")
 		}
 
-		s.WriteString(fmt.Sprintf("%s[%s] %s\n",
+		desc := ""
+		if item.Description != "" {
+			desc = ui.DimStyle.Render(item.Description)
+		}
+		s.WriteString(fmt.Sprintf("%s[%s] %-16s %s\n",
 			cursor,
 			ui.SuccessStyle.Render(item.Key),
 			item.Title,
+			desc,
 		))
 	}
 
@@ -260,34 +331,91 @@ func restartServiceAction() tea.Msg {
 }
 
 func statusAction() tea.Msg {
-	fmt.Print("\033[H\033[2J")
-	showStatus()
-	fmt.Print("\nPress Enter...")
-	fmt.Scanln()
-	return nil
+	return runBinaryAction("Status", true, "status")
 }
 
 func logsAction() tea.Msg {
 	fmt.Print("\033[H\033[2J")
 	fmt.Println("Logs (Ctrl+C to exit)")
 	fmt.Println(strings.Repeat("─", 50))
-	exec.RunCommandStd("journalctl", "-u", "v2sp", "-f", "-n", "50")
+	runSelfBinary("logs", "-f")
+	pausePrompt()
 	return nil
+}
+
+func logsErrorAction() tea.Msg {
+	return runBinaryAction("Logs (error)", true, "logs", "-l", "error", "-n", "100")
 }
 
 func editConfigAction() tea.Msg {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
-		editor = "vi"
+		editor = "nano"
+	}
+	if _, err := osexec.LookPath(editor); err != nil {
+		fmt.Println("Editor not found:", editor)
+		fmt.Println("Please install nano, e.g. apt install nano / yum install nano")
+		pausePrompt()
+		return nil
 	}
 	exec.RunCommandStd(editor, "/etc/v2sp/config.json")
 	return nil
 }
 
 func healthCheckAction() tea.Msg {
+	return runBinaryAction("Health Check", true, "health")
+}
+
+func configInitAction() tea.Msg {
+	return runBinaryAction("Config Init", true, "config", "init")
+}
+
+func configShowAction() tea.Msg {
+	return runBinaryAction("Config Show", true, "config", "show")
+}
+
+func configValidateAction() tea.Msg {
+	return runBinaryAction("Config Validate", true, "config", "validate")
+}
+
+func systemSetupAction() tea.Msg {
+	return runBinaryAction("System Setup", true, "system", "setup")
+}
+
+func syncTimeAction() tea.Msg {
+	return runBinaryAction("Sync Time", true, "synctime")
+}
+
+func x25519Action() tea.Msg {
+	return runBinaryAction("Generate X25519 key", true, "x25519")
+}
+
+func versionAction() tea.Msg {
+	return runBinaryAction("Version", true, "version")
+}
+
+func runBinaryAction(title string, pause bool, args ...string) tea.Msg {
 	fmt.Print("\033[H\033[2J")
-	healthHandle(nil, nil)
+	if title != "" {
+		fmt.Println(title)
+		fmt.Println(strings.Repeat("─", 50))
+	}
+	runSelfBinary(args...)
+	if pause {
+		pausePrompt()
+	}
+	return nil
+}
+
+func runSelfBinary(args ...string) {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "v2sp"
+	}
+	exec.RunCommandStd(exe, args...)
+}
+
+func pausePrompt() {
 	fmt.Print("\nPress Enter...")
 	fmt.Scanln()
-	return nil
 }
