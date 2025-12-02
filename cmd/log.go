@@ -11,7 +11,8 @@ import (
 var (
 	logCommand = &cobra.Command{
 		Use:   "log",
-		Short: "Log utilities",
+		Short: "View or clean v2sp logs",
+		Run:   logTailHandle,
 	}
 
 	logCleanCommand = &cobra.Command{
@@ -25,6 +26,10 @@ var (
 func init() {
 	logCommand.AddCommand(logCleanCommand)
 	command.AddCommand(logCommand)
+}
+
+func logTailHandle(_ *cobra.Command, _ []string) {
+	exec.RunCommandStd("journalctl", "-u", "v2sp.service", "-e", "--no-pager", "-f")
 }
 
 func logCleanHandle(_ *cobra.Command, _ []string) {

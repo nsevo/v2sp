@@ -24,20 +24,12 @@ var (
 		Short: "Restart v2sp service",
 		Run:   restartHandle,
 	}
-	logCommand = cobra.Command{
-		Use:   "log",
-		Short: "Output v2sp log",
-		Run: func(_ *cobra.Command, _ []string) {
-			exec.RunCommandStd("journalctl", "-u", "v2sp.service", "-e", "--no-pager", "-f")
-		},
-	}
 )
 
 func init() {
 	command.AddCommand(&startCommand)
 	command.AddCommand(&stopCommand)
 	command.AddCommand(&restartCommand)
-	command.AddCommand(&logCommand)
 }
 
 func startHandle(_ *cobra.Command, _ []string) {
