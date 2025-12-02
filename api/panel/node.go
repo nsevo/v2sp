@@ -131,42 +131,68 @@ type HysteriaNode struct {
 }
 
 // Hysteria2Node is hysteria2 node info
+// Note: Does not embed CommonNode because server_port can be string (port range)
 type Hysteria2Node struct {
-	CommonNode
-	UpMbps       int    `json:"up_mbps"`
-	DownMbps     int    `json:"down_mbps"`
-	Obfs         string `json:"obfs"`
-	ObfsPassword string `json:"obfs_password"`
+	Host         string      `json:"host"`
+	ServerPort   int         `json:"-"` // Parsed from raw, not directly from JSON
+	ServerName   string      `json:"server_name"`
+	Routes       []Route     `json:"routes"`
+	BaseConfig   *BaseConfig `json:"base_config"`
+	UpMbps       int         `json:"up_mbps"`
+	DownMbps     int         `json:"down_mbps"`
+	Obfs         string      `json:"obfs"`
+	ObfsPassword string      `json:"obfs_password"`
 	// Port can be single port (443) or range string ("20000-50000")
 	PortRange string `json:"-"` // Parsed from server_port if it's a range
 }
 
-// ParsePortConfig parses the server_port field which can be int or string range
-func (h *Hysteria2Node) ParsePortConfig(serverPort interface{}) {
-	switch v := serverPort.(type) {
-	case float64:
-		// Single port number
-		h.ServerPort = int(v)
-		h.PortRange = ""
-	case string:
-		// Could be "443" or "20000-50000"
-		if strings.Contains(v, "-") {
-			// Range format: "20000-50000"
-			h.PortRange = v
-			// Parse first port as listen port
-			parts := strings.Split(v, "-")
-			if len(parts) == 2 {
-				if port, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+// UnmarshalJSON custom unmarshaler to handle server_port as int or string
+func (h *Hysteria2Node) UnmarshalJSON(data []byte) error {
+	// Use a temporary struct to parse all fields except server_port
+	type Alias Hysteria2Node
+	aux := &struct {
+		ServerPortRaw json.RawMessage `json:"server_port"`
+		*Alias
+	}{
+		Alias: (*Alias)(h),
+	}
+
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	// Parse server_port which can be int or string
+	if len(aux.ServerPortRaw) > 0 {
+		// Try as int first
+		var portInt int
+		if err := json.Unmarshal(aux.ServerPortRaw, &portInt); err == nil {
+			h.ServerPort = portInt
+			h.PortRange = ""
+			return nil
+		}
+
+		// Try as string
+		var portStr string
+		if err := json.Unmarshal(aux.ServerPortRaw, &portStr); err == nil {
+			if strings.Contains(portStr, "-") {
+				// Range format: "20000-50000"
+				h.PortRange = portStr
+				parts := strings.Split(portStr, "-")
+				if len(parts) == 2 {
+					if port, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
+						h.ServerPort = port
+					}
+				}
+			} else {
+				// Single port as string: "443"
+				if port, err := strconv.Atoi(portStr); err == nil {
 					h.ServerPort = port
 				}
 			}
-		} else {
-			// Single port as string: "443"
-			if port, err := strconv.Atoi(v); err == nil {
-				h.ServerPort = port
-			}
 		}
 	}
+
+	return nil
 }
 
 // GetPortHoppingConfig returns port hopping configuration if enabled
@@ -184,6 +210,17 @@ func (h *Hysteria2Node) GetPortHoppingConfig() (enabled bool, startPort, endPort
 		return false, 0, 0
 	}
 	return true, start, end
+}
+
+// ToCommonNode converts Hysteria2Node to CommonNode for compatibility
+func (h *Hysteria2Node) ToCommonNode() *CommonNode {
+	return &CommonNode{
+		Host:       h.Host,
+		ServerPort: h.ServerPort,
+		ServerName: h.ServerName,
+		Routes:     h.Routes,
+		BaseConfig: h.BaseConfig,
+	}
 }
 
 type RawDNS struct {
@@ -324,14 +361,8 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode hysteria2 params error: %s", err)
 		}
-		// Parse server_port which can be int or string range
-		var rawConfig map[string]interface{}
-		if err := json.Unmarshal(r.Body(), &rawConfig); err == nil {
-			if sp, ok := rawConfig["server_port"]; ok {
-				rsp.ParsePortConfig(sp)
-			}
-		}
-		cm = &rsp.CommonNode
+		// Hysteria2Node has custom UnmarshalJSON, no need to parse separately
+		cm = rsp.ToCommonNode()
 		node.Hysteria2 = rsp
 		node.Security = Tls
 	}
