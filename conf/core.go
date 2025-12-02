@@ -10,7 +10,6 @@ type CoreConfig struct {
 	Type       string      `json:"Type"`
 	Name       string      `json:"Name"`
 	XrayConfig *XrayConfig `json:"-"`
-	Hy2Config  *Hy2Config  `json:"-"`
 }
 
 type _CoreConfig CoreConfig
@@ -33,11 +32,7 @@ func (c *CoreConfig) UnmarshalJSON(b []byte) error {
 	case "xray":
 		c.XrayConfig = NewXrayConfig()
 		return json.Unmarshal(b, c.XrayConfig)
-	case "hysteria2", "hy2":
-		c.Type = "hysteria2"
-		c.Hy2Config = NewHy2Config()
-		return json.Unmarshal(b, c.Hy2Config)
 	default:
-		return fmt.Errorf("unsupported core type: %s (supported: xray, hysteria2)", c.Type)
+		return fmt.Errorf("unsupported core type: %s (only 'xray' is supported)", c.Type)
 	}
 }

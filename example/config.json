@@ -14,15 +14,6 @@
       "DnsConfigPath": "/etc/v2sp/dns.json",
       "OutboundConfigPath": "/etc/v2sp/custom_outbound.json",
       "RouteConfigPath": "/etc/v2sp/route.json"
-    },
-    {
-      "Type": "hysteria2",
-      "Log": {
-        "Level": "info",
-        "ErrorPath": "/etc/v2sp/hy2_error.log"
-      },
-      "BinaryPath": "/usr/local/bin/hysteria",
-      "ConfigDir": "/etc/v2sp/hy2"
     }
   ],
   "Nodes": [

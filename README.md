@@ -1,18 +1,18 @@
 # v2sp
 
-A high-performance, production-ready multi-core proxy backend designed for self-hosted panels. Built with official Xray-core and Hysteria2, featuring comprehensive traffic management, intelligent connection handling, and seamless API integration.
+A high-performance, production-ready proxy backend designed for self-hosted panels. Built with official Xray-core, featuring comprehensive traffic management, intelligent connection handling, and seamless API integration.
 
 ## Overview
 
-v2sp is a multi-node, multi-core management backend that bridges self-hosted panels with Xray-core and Hysteria2. It provides enterprise-grade features including granular user limits, intelligent connection pooling, automated certificate management, and real-time traffic accounting—all through a simple, language-agnostic JSON API.
+v2sp is a multi-node management backend that bridges self-hosted panels with Xray-core. It provides enterprise-grade features including granular user limits, intelligent connection pooling, automated certificate management, and real-time traffic accounting—all through a simple, language-agnostic JSON API.
 
 ### Key Features
 
-**Multi-Core Architecture**
-- Xray-core: VLESS, VMess, Trojan, Shadowsocks with XTLS/Reality support
-- Hysteria2: High-performance UDP-based protocol (subprocess mode)
-- Automatic core selection based on node protocol type
-- Independent node operation - single node failure doesn't affect others
+**Official Xray-core Integration**
+- Uses official [XTLS/Xray-core](https://github.com/XTLS/Xray-core) without modification
+- VLESS, VMess, Trojan, Shadowsocks with XTLS/Reality support
+- Hysteria v1 (Xray native support)
+- Elegant extension via Dispatcher interface (best practice)
 
 **Traffic & Access Control**
 - Per-user speed limiting with dynamic rate adjustment
@@ -29,7 +29,6 @@ v2sp is a multi-node, multi-core management backend that bridges self-hosted pan
 **Auto-Configuration**
 - Configuration files auto-generated if missing (route.json, outbound.json)
 - Certificate directories auto-created
-- Hysteria2 node configs dynamically generated
 - Default ACL rules for private IP blocking
 
 **Advanced Features**
@@ -48,10 +47,9 @@ wget -N https://raw.githubusercontent.com/nsevo/v2sp-script/master/install.sh &&
 
 The installation script will:
 1. Download the latest v2sp binary
-2. Download Hysteria2 binary (for hysteria2 nodes)
-3. Generate default configuration files
-4. Set up systemd service
-5. Create necessary directories (/etc/v2sp, /etc/v2sp/cert, /etc/v2sp/hy2)
+2. Generate default configuration files
+3. Set up systemd service
+4. Create necessary directories (/etc/v2sp, /etc/v2sp/cert)
 
 ### Configuration Generator
 
@@ -67,7 +65,6 @@ The generator will:
 1. Fetch node info from your panel API
 2. Auto-detect protocol type and TLS requirements
 3. Configure certificate settings based on protocol
-4. Optionally enable automatic certificate provisioning
 
 ### Basic Usage
 
@@ -87,9 +84,9 @@ systemctl reload v2sp
 
 ## Architecture
 
-### Multi-Core Design
+### Design
 
-v2sp uses a selector pattern to manage multiple proxy cores:
+v2sp uses official Xray-core with elegant Dispatcher extension:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -104,27 +101,28 @@ v2sp uses a selector pattern to manage multiple proxy cores:
          ┌─────────────────┼─────────────────┐
          │                 │                 │
     ┌────▼────┐      ┌────▼────┐      ┌────▼────┐
-    │ Limiter │      │ Counter │      │Selector │
+    │ Limiter │      │ Counter │      │   Core  │
     │         │      │         │      │         │
     └─────────┘      └─────────┘      └────┬────┘
                                            │
-                      ┌────────────────────┼────────────────────┐
-                      │                    │                    │
-               ┌──────▼──────┐     ┌──────▼──────┐     ┌──────▼──────┐
-               │  Xray Core  │     │ Hysteria2   │     │  (Future)   │
-               │  (in-proc)  │     │ (subprocess)│     │             │
-               └─────────────┘     └─────────────┘     └─────────────┘
+                                    ┌──────▼──────┐
+                                    │  Xray Core  │
+                                    │  (official) │
+                                    │             │
+                                    │ + Dispatcher│
+                                    │  Extension  │
+                                    └─────────────┘
 ```
 
 ### Supported Protocols
 
-| Core | Protocol | TLS Requirement | Description |
-|------|----------|-----------------|-------------|
-| Xray | vless | Optional/Reality | VLESS with XTLS support |
-| Xray | vmess | Optional | VMess with AEAD encryption |
-| Xray | trojan | Required | Trojan protocol |
-| Xray | shadowsocks | None | Shadowsocks 2022 support |
-| Hysteria2 | hysteria2 | Required | UDP-based, high-performance |
+| Protocol | TLS Requirement | Description |
+|----------|-----------------|-------------|
+| vless | Optional/Reality | VLESS with XTLS support |
+| vmess | Optional | VMess with AEAD encryption |
+| trojan | Required | Trojan protocol |
+| shadowsocks | None | Shadowsocks 2022 support |
+| hysteria | Required | Hysteria v1 (Xray native) |
 
 ### Fault Tolerance
 
@@ -133,7 +131,7 @@ v2sp uses a selector pattern to manage multiple proxy cores:
 Starting nodes...
   Node 209: ERROR - cert request failed (skipped)
   Node 210: OK - vless started
-  Node 211: OK - hysteria2 started
+  Node 211: OK - vmess started
 Summary: 2 success, 1 failed, 3 total
 ```
 
@@ -171,62 +169,6 @@ API call failed: 500 Internal Server Error
 - IPv4/IPv6 support with address normalization
 - Grace period for transient IP changes
 
-### Hysteria2 Port Hopping
-
-Port hopping helps bypass ISP UDP throttling by switching between multiple ports.
-
-**How It Works**
-```
-Client ──UDP──► [20000-50000] ──iptables─► [:20000] ──► Hy2 Server
-```
-
-1. Hysteria2 server listens on the first port of the range
-2. v2sp automatically creates iptables rules to redirect entire range
-3. Client connects to any port in range, randomly hopping
-
-**Port Configuration**
-
-| `server_port` Value | Mode | v2sp Action |
-|---------------------|------|-------------|
-| `443` (integer) | Single port | Listen on 443 only |
-| `"20000-50000"` (string) | Port hopping | Listen on 20000, iptables redirect 20000-50000 |
-
-**Database Field**: Uses existing `port_range` field (e.g., `"20000-50000"`)
-- If `port_range` is empty: single port mode using `backend_port`
-- If `port_range` is set: port hopping mode, value passed as `server_port`
-
-**API Response Examples**
-
-Single port (no hopping):
-```json
-{
-  "node_type": "hysteria2",
-  "server_port": 443
-}
-```
-
-Port hopping (automatic iptables):
-```json
-{
-  "node_type": "hysteria2",
-  "server_port": "20000-50000"
-}
-```
-
-**Automatic Management**
-- Rules created on node startup with unique comment tags
-- Stale rules cleaned up on v2sp restart
-- Rules removed when node is deleted
-- Both IPv4 and IPv6 supported
-
-**Generated iptables Rules**
-```bash
-# IPv4
-iptables -t nat -A PREROUTING -p udp --dport 20000:50000 -j REDIRECT --to-ports 20000 -m comment --comment "v2sp-hy2:node-tag"
-# IPv6
-ip6tables -t nat -A PREROUTING -p udp --dport 20000:50000 -j REDIRECT --to-ports 20000 -m comment --comment "v2sp-hy2:node-tag"
-```
-
 ### Certificate Management
 
 **Supported Modes**
@@ -238,14 +180,6 @@ ip6tables -t nat -A PREROUTING -p udp --dport 20000:50000 -j REDIRECT --to-ports
 | `http` | ACME HTTP-01 challenge | Yes |
 | `dns` | ACME DNS-01 challenge | Yes |
 | `self` | Self-signed certificate | No |
-
-**Auto-Configuration**
-```bash
-# initconfig.sh automatically detects TLS requirements:
-Node 209: hysteria2 -> jp.example.com (TLS required, auto-cert)
-Node 210: vless (Reality, no cert needed)
-Node 211: shadowsocks (no TLS)
-```
 
 ## API Specification
 
@@ -269,13 +203,13 @@ All requests include:
 
 The API MUST return `node_type` field:
 
-| node_type | Core | Description |
-|-----------|------|-------------|
-| `vless` | Xray | VLESS protocol |
-| `vmess` | Xray | VMess protocol |
-| `trojan` | Xray | Trojan protocol |
-| `shadowsocks` | Xray | Shadowsocks protocol |
-| `hysteria2` | Hysteria2 | Hysteria2 protocol |
+| node_type | Description |
+|-----------|-------------|
+| `vless` | VLESS protocol |
+| `vmess` | VMess protocol |
+| `trojan` | Trojan protocol |
+| `shadowsocks` | Shadowsocks protocol |
+| `hysteria` | Hysteria v1 protocol |
 
 **Example Response**
 ```json
@@ -331,15 +265,6 @@ The API MUST return `node_type` field:
       },
       "OutboundConfigPath": "/etc/v2sp/custom_outbound.json",
       "RouteConfigPath": "/etc/v2sp/route.json"
-    },
-    {
-      "Type": "hysteria2",
-      "Log": {
-        "Level": "error",
-        "ErrorPath": "/etc/v2sp/hy2_error.log"
-      },
-      "BinaryPath": "/usr/local/bin/hysteria",
-      "ConfigDir": "/etc/v2sp/hy2"
     }
   ],
   "Nodes": [
@@ -371,14 +296,6 @@ The API MUST return `node_type` field:
 | `OutboundConfigPath` | string | Path to outbound config (auto-created if missing) |
 | `RouteConfigPath` | string | Path to route config (auto-created if missing) |
 | `AssetPath` | string | Path to geoip.dat and geosite.dat |
-
-**Hysteria2 Core Options**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `Type` | string | Must be "hysteria2" |
-| `BinaryPath` | string | Path to hysteria binary (default: /usr/local/bin/hysteria) |
-| `ConfigDir` | string | Directory for node configs (default: /etc/v2sp/hy2) |
 
 **Certificate Options**
 
@@ -416,23 +333,6 @@ When v2sp starts, it automatically creates missing configuration files:
 ]
 ```
 
-**Hysteria2 node configs** (per-node YAML)
-```yaml
-listen: ":443"
-tls:
-  cert: /etc/v2sp/cert/domain.crt
-  key: /etc/v2sp/cert/domain.key
-auth:
-  type: userpass
-  userpass:
-    uuid1: uuid1
-    uuid2: uuid2
-acl:
-  inline:
-    - reject(geoip:private)
-    - direct(all)
-```
-
 ## Building from Source
 
 ### Prerequisites
@@ -455,22 +355,17 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o v2sp-linux-ar
 ### Common Issues
 
 **Single node failure crashes service**
-- Update to v1.4.3+ which includes independent node operation
+- Update to latest version which includes independent node operation
 - Failed nodes are now skipped, others continue
 
 **API 500 errors causing service restart**
-- Update to v1.4.3+ which includes fault-tolerant API handling
+- Update to latest version which includes fault-tolerant API handling
 - Transient errors are logged and retried automatically
 
 **Certificate request fails**
 - Ensure `CertFile` and `KeyFile` paths are specified (even for http mode)
 - Create `/etc/v2sp/cert/` directory
 - Verify port 80 is accessible (for http mode)
-
-**Hysteria2 node not starting**
-- Ensure `/usr/local/bin/hysteria` exists and is executable
-- Check `/etc/v2sp/hy2/` directory is writable
-- Verify TLS certificate is valid
 
 ### Debug Mode
 
@@ -482,39 +377,10 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o v2sp-linux-ar
 }
 ```
 
-## Version History
-
-### v1.4.4
-- Added Hysteria2 port hopping support
-- Automatic iptables rule management (create, cleanup, restart-safe)
-- IPv4 and IPv6 port hopping support
-- Stale rule cleanup on service start
-
-### v1.4.3
-- Independent node operation - single node failure doesn't affect others
-- Removed Panic calls, replaced with graceful error handling
-- API communication failures handled with automatic retry
-- Improved stability for multi-node deployments
-
-### v1.4.2
-- Fixed Hysteria2 config filename sanitization
-- Support special characters in node tags
-
-### v1.4.1
-- Fixed node type validation for hysteria2
-- Allow empty Core field in node options
-
-### v1.4.0
-- Added Hysteria2 support (subprocess mode)
-- Multi-core architecture with automatic core selection
-- Auto-create missing configuration files
-- Certificate path auto-configuration in initconfig.sh
-
 ## Credits
 
 **Core Projects**
 - [XTLS/Xray-core](https://github.com/XTLS/Xray-core) - High-performance proxy platform
-- [apernet/hysteria](https://github.com/apernet/hysteria) - Hysteria2 protocol implementation
 
 **Inspiration**
 - [XrayR](https://github.com/XrayR-project/XrayR) - Xray backend reference

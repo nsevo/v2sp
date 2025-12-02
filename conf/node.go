@@ -123,17 +123,10 @@ func (o *Options) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
-	// Core can be empty - Selector will auto-select based on node type
-	// Supported cores: xray, hysteria2
-	switch o.Core {
-	case "", "xray":
-		// Default to xray, parse XrayOptions
-		o.XrayOptions = NewXrayOptions()
-		return json.Unmarshal(data, o.XrayOptions)
-	case "hysteria2", "hy2":
-		// Hysteria2 doesn't need XrayOptions
-		return nil
-	default:
-		return fmt.Errorf("unsupported core type: %s (supported: xray, hysteria2)", o.Core)
+	// Only xray core is supported
+	if o.Core != "" && o.Core != "xray" {
+		return fmt.Errorf("unsupported core type: %s (only 'xray' is supported)", o.Core)
 	}
+	o.XrayOptions = NewXrayOptions()
+	return json.Unmarshal(data, o.XrayOptions)
 }

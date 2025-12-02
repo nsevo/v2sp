@@ -32,10 +32,7 @@ type NodeInfo struct {
 	VAllss      *VAllssNode
 	Shadowsocks *ShadowsocksNode
 	Trojan      *TrojanNode
-	Tuic        *TuicNode
-	AnyTls      *AnyTlsNode
 	Hysteria    *HysteriaNode
-	Hysteria2   *Hysteria2Node
 	Common      *CommonNode
 }
 
@@ -112,115 +109,11 @@ type TrojanNode struct {
 	NetworkSettings json.RawMessage `json:"networkSettings"`
 }
 
-type TuicNode struct {
-	CommonNode
-	CongestionControl string `json:"congestion_control"`
-	ZeroRTTHandshake  bool   `json:"zero_rtt_handshake"`
-}
-
-type AnyTlsNode struct {
-	CommonNode
-	PaddingScheme []string `json:"padding_scheme,omitempty"`
-}
-
 type HysteriaNode struct {
 	CommonNode
 	UpMbps   int    `json:"up_mbps"`
 	DownMbps int    `json:"down_mbps"`
 	Obfs     string `json:"obfs"`
-}
-
-// Hysteria2Node is hysteria2 node info
-// Note: Does not embed CommonNode because server_port can be string (port range)
-type Hysteria2Node struct {
-	Host         string      `json:"host"`
-	ServerPort   int         `json:"-"` // Parsed from raw, not directly from JSON
-	ServerName   string      `json:"server_name"`
-	Routes       []Route     `json:"routes"`
-	BaseConfig   *BaseConfig `json:"base_config"`
-	UpMbps       int         `json:"up_mbps"`
-	DownMbps     int         `json:"down_mbps"`
-	Obfs         string      `json:"obfs"`
-	ObfsPassword string      `json:"obfs_password"`
-	// Port can be single port (443) or range string ("20000-50000")
-	PortRange string `json:"-"` // Parsed from server_port if it's a range
-}
-
-// UnmarshalJSON custom unmarshaler to handle server_port as int or string
-func (h *Hysteria2Node) UnmarshalJSON(data []byte) error {
-	// Use a temporary struct to parse all fields except server_port
-	type Alias Hysteria2Node
-	aux := &struct {
-		ServerPortRaw json.RawMessage `json:"server_port"`
-		*Alias
-	}{
-		Alias: (*Alias)(h),
-	}
-
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-
-	// Parse server_port which can be int or string
-	if len(aux.ServerPortRaw) > 0 {
-		// Try as int first
-		var portInt int
-		if err := json.Unmarshal(aux.ServerPortRaw, &portInt); err == nil {
-			h.ServerPort = portInt
-			h.PortRange = ""
-			return nil
-		}
-
-		// Try as string
-		var portStr string
-		if err := json.Unmarshal(aux.ServerPortRaw, &portStr); err == nil {
-			if strings.Contains(portStr, "-") {
-				// Range format: "20000-50000"
-				h.PortRange = portStr
-				parts := strings.Split(portStr, "-")
-				if len(parts) == 2 {
-					if port, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil {
-						h.ServerPort = port
-					}
-				}
-			} else {
-				// Single port as string: "443"
-				if port, err := strconv.Atoi(portStr); err == nil {
-					h.ServerPort = port
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// GetPortHoppingConfig returns port hopping configuration if enabled
-func (h *Hysteria2Node) GetPortHoppingConfig() (enabled bool, startPort, endPort int) {
-	if h.PortRange == "" || !strings.Contains(h.PortRange, "-") {
-		return false, 0, 0
-	}
-	parts := strings.Split(h.PortRange, "-")
-	if len(parts) != 2 {
-		return false, 0, 0
-	}
-	start, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
-	end, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err1 != nil || err2 != nil || start >= end {
-		return false, 0, 0
-	}
-	return true, start, end
-}
-
-// ToCommonNode converts Hysteria2Node to CommonNode for compatibility
-func (h *Hysteria2Node) ToCommonNode() *CommonNode {
-	return &CommonNode{
-		Host:       h.Host,
-		ServerPort: h.ServerPort,
-		ServerName: h.ServerName,
-		Routes:     h.Routes,
-		BaseConfig: h.BaseConfig,
-	}
 }
 
 type RawDNS struct {
@@ -328,24 +221,6 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		cm = &rsp.CommonNode
 		node.Trojan = rsp
 		node.Security = Tls
-	case "tuic":
-		rsp := &TuicNode{}
-		err = json.Unmarshal(r.Body(), rsp)
-		if err != nil {
-			return nil, fmt.Errorf("decode tuic params error: %s", err)
-		}
-		cm = &rsp.CommonNode
-		node.Tuic = rsp
-		node.Security = Tls
-	case "anytls":
-		rsp := &AnyTlsNode{}
-		err = json.Unmarshal(r.Body(), rsp)
-		if err != nil {
-			return nil, fmt.Errorf("decode anytls params error: %s", err)
-		}
-		cm = &rsp.CommonNode
-		node.AnyTls = rsp
-		node.Security = Tls
 	case "hysteria":
 		rsp := &HysteriaNode{}
 		err = json.Unmarshal(r.Body(), rsp)
@@ -355,16 +230,8 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		cm = &rsp.CommonNode
 		node.Hysteria = rsp
 		node.Security = Tls
-	case "hysteria2":
-		rsp := &Hysteria2Node{}
-		err = json.Unmarshal(r.Body(), rsp)
-		if err != nil {
-			return nil, fmt.Errorf("decode hysteria2 params error: %s", err)
-		}
-		// Hysteria2Node has custom UnmarshalJSON, no need to parse separately
-		cm = rsp.ToCommonNode()
-		node.Hysteria2 = rsp
-		node.Security = Tls
+	default:
+		return nil, fmt.Errorf("unsupported node type: %s", nodeType)
 	}
 
 	// parse rules and dns
