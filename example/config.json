@@ -1,13 +1,14 @@
 {
   "Log": {
-    "Level": "info",
+    "Level": "error",
     "Output": ""
   },
   "Cores": [
     {
       "Type": "xray",
       "Log": {
-        "Level": "info",
+        "Level": "error",
+        "AccessPath": "none",
         "ErrorPath": "/etc/v2sp/error.log"
       },
       "AssetPath": "/etc/v2sp/",

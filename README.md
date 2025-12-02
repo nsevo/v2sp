@@ -261,6 +261,7 @@ The API MUST return `node_type` field:
       "Type": "xray",
       "Log": {
         "Level": "error",
+        "AccessPath": "none",
         "ErrorPath": "/etc/v2sp/error.log"
       },
       "OutboundConfigPath": "/etc/v2sp/custom_outbound.json",
@@ -296,6 +297,16 @@ The API MUST return `node_type` field:
 | `OutboundConfigPath` | string | Path to outbound config (auto-created if missing) |
 | `RouteConfigPath` | string | Path to route config (auto-created if missing) |
 | `AssetPath` | string | Path to geoip.dat and geosite.dat |
+
+**Xray Log Options**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `Level` | string | "warning" | Log level: debug, info, warning, error, none |
+| `AccessPath` | string | "" | Access log path. Set to `"none"` to disable |
+| `ErrorPath` | string | "" | Error log path |
+
+> **Note**: By default, Xray outputs connection logs (access log) to stdout. To disable these verbose logs, set `"AccessPath": "none"` in the Xray Log configuration.
 
 **Certificate Options**
 
