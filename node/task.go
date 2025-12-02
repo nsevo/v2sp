@@ -91,7 +91,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Panic("Delete node failed")
+			}).Error("Delete node failed, will retry next interval")
 			return nil
 		}
 
@@ -135,7 +135,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Panic("Add node failed")
+			}).Error("Add node failed, will retry next interval")
 			return nil
 		}
 		_, err = c.server.AddUsers(&vCore.AddUsersParams{
