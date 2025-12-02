@@ -58,7 +58,7 @@ func New(c *conf.ApiConfig) (*Client, error) {
 	switch nodeType {
 	case "v2ray":
 		nodeType = "vmess"
-	case "", "vmess", "trojan", "shadowsocks", "vless", "hysteria":
+	case "", "vmess", "trojan", "shadowsocks", "vless", "hysteria", "hysteria2":
 		// empty is allowed - will be auto-detected from API
 	default:
 		return nil, fmt.Errorf("unsupported Node type: %s", c.NodeType)
