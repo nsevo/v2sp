@@ -21,27 +21,33 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 	}
 
 	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
-		log.Print(err)
+		log.WithField("err", err).Warn("Get online device failed")
 	} else if len(*onlineDevice) > 0 {
-		// Only report user has traffic > 100kb to allow ping test
-		var result []panel.OnlineUser
-		var nocountUID = make(map[int]struct{})
+		// Only report user has traffic > threshold to allow ping test
+		// Pre-allocate maps with estimated capacity
+		nocountUID := make(map[int]struct{}, len(userTraffic))
 		for _, traffic := range userTraffic {
 			total := traffic.Upload + traffic.Download
 			if total < int64(c.Options.DeviceOnlineMinTraffic*1000) {
 				nocountUID[traffic.UID] = struct{}{}
 			}
 		}
+
+		// Pre-allocate result slice with capacity
+		result := make([]panel.OnlineUser, 0, len(*onlineDevice))
 		for _, online := range *onlineDevice {
 			if _, ok := nocountUID[online.UID]; !ok {
 				result = append(result, online)
 			}
 		}
-		data := make(map[int][]string)
+
+		// Build data map
+		data := make(map[int][]string, len(result))
 		for _, onlineuser := range result {
 			// json structure: { UID1:["ip1","ip2"],UID2:["ip3","ip4"] }
 			data[onlineuser.UID] = append(data[onlineuser.UID], onlineuser.IP)
 		}
+
 		if err = c.apiClient.ReportNodeOnlineUsers(&data); err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,

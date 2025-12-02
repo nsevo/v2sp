@@ -16,23 +16,19 @@ func (l *Limiter) AddDynamicSpeedLimit(tag string, userInfo *panel.UserInfo, lim
 	return nil
 }
 
-// determineSpeedLimit returns the minimum non-zero rate
-func determineSpeedLimit(limit1, limit2 int) (limit int) {
-	if limit1 == 0 || limit2 == 0 {
-		if limit1 > limit2 {
-			return limit1
-		} else if limit1 < limit2 {
-			return limit2
-		} else {
-			return 0
-		}
-	} else {
-		if limit1 > limit2 {
-			return limit2
-		} else if limit1 < limit2 {
-			return limit1
-		} else {
-			return limit1
-		}
+// determineSpeedLimit returns the minimum non-zero rate.
+// If one limit is 0 (unlimited), returns the other.
+// If both are 0, returns 0 (unlimited).
+// If both are non-zero, returns the smaller one.
+func determineSpeedLimit(limit1, limit2 int) int {
+	if limit1 == 0 {
+		return limit2
 	}
+	if limit2 == 0 {
+		return limit1
+	}
+	if limit1 < limit2 {
+		return limit1
+	}
+	return limit2
 }

@@ -287,15 +287,27 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 }
 
 func intervalToTime(i interface{}) time.Duration {
-	switch reflect.TypeOf(i).Kind() {
-	case reflect.Int:
-		return time.Duration(i.(int)) * time.Second
-	case reflect.String:
-		i, _ := strconv.Atoi(i.(string))
-		return time.Duration(i) * time.Second
-	case reflect.Float64:
-		return time.Duration(i.(float64)) * time.Second
+	if i == nil {
+		return 60 * time.Second // Default interval
+	}
+	switch v := i.(type) {
+	case int:
+		return time.Duration(v) * time.Second
+	case int64:
+		return time.Duration(v) * time.Second
+	case float64:
+		return time.Duration(v) * time.Second
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return time.Duration(n) * time.Second
+		}
+		return 60 * time.Second
 	default:
-		return time.Duration(reflect.ValueOf(i).Int()) * time.Second
+		// Fallback using reflection
+		rv := reflect.ValueOf(i)
+		if rv.Kind() >= reflect.Int && rv.Kind() <= reflect.Int64 {
+			return time.Duration(rv.Int()) * time.Second
+		}
+		return 60 * time.Second
 	}
 }
