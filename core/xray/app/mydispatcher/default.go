@@ -196,9 +196,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 		}
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
+			lm = NewLinkManager()
 			d.LinkManagers.Store(user.Email, lm)
 		} else {
 			lm = lmloaded.(*LinkManager)
@@ -404,9 +402,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 		var lm *LinkManager
 		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = &LinkManager{
-				links: make(map[*ManagedWriter]buf.Reader),
-			}
+			lm = NewLinkManager()
 			d.LinkManagers.Store(user.Email, lm)
 		} else {
 			lm = lmloaded.(*LinkManager)

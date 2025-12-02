@@ -1,7 +1,6 @@
 package node
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/nsevo/v2sp/api/panel"
@@ -52,9 +51,7 @@ func (c *Controller) Start() error {
 	if err != nil {
 		return fmt.Errorf("get user list error: %s", err)
 	}
-	if len(c.userList) == 0 {
-		return errors.New("add users error: not have any user")
-	}
+	// Allow empty user list - users will be added when available
 	c.aliveMap, err = c.apiClient.GetUserAlive()
 	if err != nil {
 		return fmt.Errorf("failed to get user alive list: %s", err)

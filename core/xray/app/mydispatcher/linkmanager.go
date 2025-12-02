@@ -1,6 +1,7 @@
 package mydispatcher
 
 import (
+	"container/list"
 	sync "sync"
 	"time"
 
@@ -12,6 +13,7 @@ type ManagedWriter struct {
 	writer     buf.Writer
 	manager    *LinkManager
 	createTime time.Time
+	element    *list.Element // Reference to list element for O(1) removal
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
@@ -23,63 +25,87 @@ func (w *ManagedWriter) Close() error {
 	return common.Close(w.writer)
 }
 
+// linkEntry stores the writer-reader pair in the ordered list
+type linkEntry struct {
+	writer *ManagedWriter
+	reader buf.Reader
+}
+
+// LinkManager manages connections using a doubly-linked list for O(1) oldest removal
 type LinkManager struct {
-	links map[*ManagedWriter]buf.Reader
+	links *list.List                   // Ordered list (oldest at front)
+	index map[*ManagedWriter]*linkEntry // Fast lookup by writer
 	mu    sync.Mutex
+}
+
+// NewLinkManager creates a new LinkManager
+func NewLinkManager() *LinkManager {
+	return &LinkManager{
+		links: list.New(),
+		index: make(map[*ManagedWriter]*linkEntry),
+	}
 }
 
 func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.links[writer] = reader
+
+	entry := &linkEntry{writer: writer, reader: reader}
+	// Add to back of list (newest)
+	elem := m.links.PushBack(entry)
+	writer.element = elem
+	m.index[writer] = entry
 }
 
 func (m *LinkManager) RemoveWriter(writer *ManagedWriter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.links, writer)
+
+	if writer.element != nil {
+		m.links.Remove(writer.element)
+		writer.element = nil
+	}
+	delete(m.index, writer)
 }
 
 func (m *LinkManager) CloseAll() {
-	for w, r := range m.links {
-		common.Close(w)
-		common.Interrupt(r)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for elem := m.links.Front(); elem != nil; elem = elem.Next() {
+		entry := elem.Value.(*linkEntry)
+		common.Close(entry.writer.writer)
+		common.Interrupt(entry.reader)
 	}
+	m.links.Init()
+	m.index = make(map[*ManagedWriter]*linkEntry)
 }
 
 func (m *LinkManager) GetConnectionCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.links)
+	return m.links.Len()
 }
 
+// RemoveOldest removes the oldest connection. O(1) operation.
 func (m *LinkManager) RemoveOldest() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
-	if len(m.links) == 0 {
+
+	// Get the oldest (front of list)
+	front := m.links.Front()
+	if front == nil {
 		return false
 	}
-	
-	var oldestWriter *ManagedWriter
-	var oldestTime time.Time
-	
-	// Find the oldest connection
-	for w := range m.links {
-		if oldestWriter == nil || w.createTime.Before(oldestTime) {
-			oldestWriter = w
-			oldestTime = w.createTime
-		}
-	}
-	
-	if oldestWriter != nil {
-		reader := m.links[oldestWriter]
-		delete(m.links, oldestWriter)
-		// Close the oldest connection
-		common.Close(oldestWriter.writer)
-		common.Interrupt(reader)
-		return true
-	}
-	
-	return false
+
+	entry := front.Value.(*linkEntry)
+	m.links.Remove(front)
+	entry.writer.element = nil
+	delete(m.index, entry.writer)
+
+	// Close the connection
+	common.Close(entry.writer.writer)
+	common.Interrupt(entry.reader)
+
+	return true
 }

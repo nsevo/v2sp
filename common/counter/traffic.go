@@ -7,6 +7,7 @@ import (
 
 type TrafficCounter struct {
 	Counters sync.Map
+	count    atomic.Int64 // Fast counter for Len()
 }
 
 type TrafficStorage struct {
@@ -26,6 +27,7 @@ func (c *TrafficCounter) GetCounter(uuid string) *TrafficStorage {
 	if cts, loaded := c.Counters.LoadOrStore(uuid, newStorage); loaded {
 		return cts.(*TrafficStorage)
 	}
+	c.count.Add(1) // Increment count when new storage is added
 	return newStorage
 }
 
@@ -43,13 +45,9 @@ func (c *TrafficCounter) GetDownCount(uuid string) int64 {
 	return 0
 }
 
+// Len returns the number of counters. O(1) operation.
 func (c *TrafficCounter) Len() int {
-	length := 0
-	c.Counters.Range(func(_, _ interface{}) bool {
-		length++
-		return true
-	})
-	return length
+	return int(c.count.Load())
 }
 
 func (c *TrafficCounter) Reset(uuid string) {
@@ -60,7 +58,9 @@ func (c *TrafficCounter) Reset(uuid string) {
 }
 
 func (c *TrafficCounter) Delete(uuid string) {
-	c.Counters.Delete(uuid)
+	if _, loaded := c.Counters.LoadAndDelete(uuid); loaded {
+		c.count.Add(-1) // Decrement count when storage is deleted
+	}
 }
 
 func (c *TrafficCounter) Rx(uuid string, n int) {
