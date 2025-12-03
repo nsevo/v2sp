@@ -81,30 +81,58 @@ func (c *Controller) Start() error {
 	if err != nil {
 		return fmt.Errorf("add new node error: %s", err)
 	}
-	// Import all users at once (XrayR approach)
-	log.WithFields(log.Fields{
-		"tag":   c.tag,
-		"users": len(c.userList),
-	}).Info("Importing users...")
-	start := time.Now()
-	added, err := c.server.AddUsers(&vCore.AddUsersParams{
-		Tag:      c.tag,
-		Users:    c.userList,
-		NodeInfo: node,
-	})
-	if err != nil {
+
+	// For large user counts, import asynchronously to avoid blocking service startup
+	if len(c.userList) > 10000 {
 		log.WithFields(log.Fields{
-			"tag":     c.tag,
-			"err":     err,
-			"elapsed": time.Since(start),
-		}).Error("Add users failed")
-		return fmt.Errorf("add users error: %s", err)
+			"tag":   c.tag,
+			"users": len(c.userList),
+		}).Info("Large user count detected - importing asynchronously in background")
+
+		// Start async import
+		go func() {
+			start := time.Now()
+			added, err := c.server.AddUsers(&vCore.AddUsersParams{
+				Tag:      c.tag,
+				Users:    c.userList,
+				NodeInfo: node,
+			})
+			if err != nil {
+				log.WithFields(log.Fields{
+					"tag":     c.tag,
+					"err":     err,
+					"elapsed": time.Since(start).Truncate(time.Second),
+				}).Error("Async user import failed")
+			} else {
+				log.WithFields(log.Fields{
+					"tag":      c.tag,
+					"users":    added,
+					"duration": time.Since(start).Truncate(time.Second),
+				}).Info("Async user import completed successfully")
+			}
+		}()
+	} else {
+		// Small user count - import synchronously
+		log.WithFields(log.Fields{
+			"tag":   c.tag,
+			"users": len(c.userList),
+		}).Info("Importing users...")
+		start := time.Now()
+		added, err := c.server.AddUsers(&vCore.AddUsersParams{
+			Tag:      c.tag,
+			Users:    c.userList,
+			NodeInfo: node,
+		})
+		if err != nil {
+			return fmt.Errorf("add users error: %s", err)
+		}
+		log.WithFields(log.Fields{
+			"tag":      c.tag,
+			"users":    added,
+			"duration": time.Since(start).Truncate(time.Millisecond),
+		}).Info("Users imported successfully")
 	}
-	log.WithFields(log.Fields{
-		"tag":      c.tag,
-		"users":    added,
-		"duration": time.Since(start).Truncate(time.Millisecond),
-	}).Info("Users imported successfully")
+
 	c.info = node
 	c.startTasks(node)
 	return nil
