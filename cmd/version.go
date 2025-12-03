@@ -3,13 +3,12 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/nsevo/v2sp/common/version"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version  = "TempVersion" // use -ldflags to replace
-	codename = "v2sp"
-	intro    = "Multi-core backend for self-hosted panels"
+	intro = "Multi-core backend for self-hosted panels"
 )
 
 var versionCommand = cobra.Command{
@@ -25,7 +24,7 @@ func init() {
 }
 
 func showVersion() {
-	fmt.Printf("%s %s\n", codename, version)
+	fmt.Printf("%s %s\n", version.Codename, version.Version)
 	fmt.Println(intro)
 	//fmt.Printf("Supported cores: %s\n", strings.Join(vCore.RegisteredCore(), ", "))
 	// Warning

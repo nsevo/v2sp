@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
-
 	"github.com/go-resty/resty/v2"
+	"github.com/nsevo/v2sp/common/version"
 	"github.com/nsevo/v2sp/conf"
+	"github.com/sirupsen/logrus"
 )
 
 // Panel is the interface for different panel's api.
@@ -52,6 +52,7 @@ func New(c *conf.ApiConfig) (*Client, error) {
 		}
 	})
 	client.SetBaseURL(c.APIHost)
+	client.SetHeader("User-Agent", fmt.Sprintf("%s/%s", version.Codename, version.Version))
 
 	// Normalize node type (can be empty, will be auto-detected from API)
 	nodeType := strings.ToLower(c.NodeType)
