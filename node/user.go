@@ -13,10 +13,11 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Info("Report user traffic failed")
+			}).Warn("Report user traffic failed")
 		} else {
 			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
-			log.WithField("tag", c.tag).Debugf("User traffic: %+v", userTraffic)
+			// Debug log disabled for large user counts to avoid massive log output
+			// log.WithField("tag", c.tag).Debugf("User traffic: %+v", userTraffic)
 		}
 	}
 
@@ -52,10 +53,11 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
-			}).Info("Report online users failed")
+			}).Warn("Report online users failed")
 		} else {
 			log.WithField("tag", c.tag).Infof("Total %d online users, %d Reported", len(*onlineDevice), len(result))
-			log.WithField("tag", c.tag).Debugf("Online users: %+v", data)
+			// Debug log disabled for large user counts to avoid massive log output
+			// log.WithField("tag", c.tag).Debugf("Online users: %+v", data)
 		}
 	}
 

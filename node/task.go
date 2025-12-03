@@ -56,7 +56,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
-		}).Error("Get node info failed")
+		}).Warn("Get node info failed, will retry next interval")
 		return nil
 	}
 	// get user info
@@ -65,7 +65,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
-		}).Error("Get user list failed")
+		}).Warn("Get user list failed, will retry next interval")
 		return nil
 	}
 	// get user alive
@@ -74,7 +74,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
-		}).Error("Get alive list failed")
+		}).Warn("Get alive list failed, will retry next interval")
 		return nil
 	}
 	if newN != nil {
