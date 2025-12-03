@@ -65,10 +65,20 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 
 func compareUserList(old, new []panel.UserInfo) (deleted, added, updated []panel.UserInfo) {
 	// Use UUID as the unique key to track users
-	oldMap := make(map[string]panel.UserInfo)
+	oldMap := make(map[string]panel.UserInfo, len(old))
 	for _, user := range old {
 		oldMap[user.Uuid] = user
 	}
+
+	// Pre-allocate slices with estimated capacity to reduce allocations
+	// Most updates have small deltas, so we estimate 10% change rate
+	estimatedChanges := len(new) / 10
+	if estimatedChanges < 100 {
+		estimatedChanges = 100
+	}
+	added = make([]panel.UserInfo, 0, estimatedChanges)
+	updated = make([]panel.UserInfo, 0, estimatedChanges)
+	deleted = make([]panel.UserInfo, 0, estimatedChanges)
 
 	for _, newUser := range new {
 		if oldUser, exists := oldMap[newUser.Uuid]; exists {

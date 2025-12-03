@@ -30,28 +30,43 @@ func (c *Xray) GetUserManager(tag string) (proxy.UserManager, error) {
 }
 
 func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
+	if len(users) == 0 {
+		return nil
+	}
+
+	// Step 1: Get UserManager before locking
 	userManager, err := c.GetUserManager(tag)
 	if err != nil {
 		return fmt.Errorf("get user manager error: %s", err)
 	}
-	var user string
-	c.users.mapLock.Lock()
-	defer c.users.mapLock.Unlock()
+
+	// Step 2: Build user tags and remove from Xray UserManager (without our lock)
+	userTags := make([]string, len(users))
 	for i := range users {
-		user = format.UserTag(tag, users[i].Uuid)
-		err = userManager.RemoveUser(context.Background(), user)
+		userTags[i] = format.UserTag(tag, users[i].Uuid)
+		err = userManager.RemoveUser(context.Background(), userTags[i])
 		if err != nil {
 			return err
 		}
-		delete(c.users.uidMap, user)
+	}
+
+	// Step 3: Update our internal maps with minimal lock time
+	c.users.mapLock.Lock()
+	for _, userTag := range userTags {
+		delete(c.users.uidMap, userTag)
+	}
+	c.users.mapLock.Unlock()
+
+	// Step 4: Clean up counters and link managers (no lock needed, they use sync.Map)
+	for _, userTag := range userTags {
 		if v, ok := c.dispatcher.Counter.Load(tag); ok {
 			tc := v.(*counter.TrafficCounter)
-			tc.Delete(user)
+			tc.Delete(userTag)
 		}
-		if v, ok := c.dispatcher.LinkManagers.Load(user); ok {
+		if v, ok := c.dispatcher.LinkManagers.Load(userTag); ok {
 			lm := v.(*mydispatcher.LinkManager)
 			lm.CloseAll()
-			c.dispatcher.LinkManagers.Delete(user)
+			c.dispatcher.LinkManagers.Delete(userTag)
 		}
 	}
 	return nil
@@ -94,12 +109,8 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 }
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
-	c.users.mapLock.Lock()
-	defer c.users.mapLock.Unlock()
-	for i := range p.Users {
-		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
-	}
-	var users []*protocol.User
+	// Step 1: Build protocol users without lock (CPU-bound, can be done in parallel)
+	users := make([]*protocol.User, 0, len(p.Users))
 	switch p.NodeInfo.Type {
 	case "vmess":
 		users = buildVmessUsers(p.Tag, p.Users)
@@ -115,10 +126,21 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	default:
 		return 0, fmt.Errorf("unsupported node type: %s", p.NodeInfo.Type)
 	}
+
+	// Step 2: Get UserManager before locking
 	man, err := c.GetUserManager(p.Tag)
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
+
+	// Step 3: Update uidMap with minimal lock time
+	c.users.mapLock.Lock()
+	for i := range p.Users {
+		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
+	}
+	c.users.mapLock.Unlock()
+
+	// Step 4: Add users to manager without holding our lock (UserManager has its own locking)
 	for _, u := range users {
 		mUser, err := u.ToMemoryUser()
 		if err != nil {

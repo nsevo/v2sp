@@ -5,6 +5,7 @@ import (
 
 	"github.com/nsevo/v2sp/api/panel"
 	"github.com/nsevo/v2sp/common/task"
+	vCore "github.com/nsevo/v2sp/core"
 	"github.com/nsevo/v2sp/limiter"
 	log "github.com/sirupsen/logrus"
 )
@@ -137,7 +138,12 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}).Error("Add node failed, will retry next interval")
 			return nil
 		}
-		addedTotal, duration, err := c.addUsersInBatches(newN, c.userList)
+		start := time.Now()
+		addedTotal, err := c.server.AddUsers(&vCore.AddUsersParams{
+			Tag:      c.tag,
+			Users:    c.userList,
+			NodeInfo: newN,
+		})
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
@@ -147,8 +153,9 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}
 		log.WithFields(log.Fields{
 			"tag":      c.tag,
-			"duration": duration.Truncate(time.Millisecond),
-		}).Infof("Reloaded %d users after node change", addedTotal)
+			"users":    addedTotal,
+			"duration": time.Since(start).Truncate(time.Millisecond),
+		}).Info("Users reloaded after node change")
 		// Check interval
 		if c.nodeInfoMonitorPeriodic.Interval != newN.PullInterval &&
 			newN.PullInterval != 0 {
@@ -187,7 +194,11 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	}
 	if len(added) > 0 {
 		// have added users
-		_, _, err = c.addUsersInBatches(c.info, added)
+		_, err = c.server.AddUsers(&vCore.AddUsersParams{
+			Tag:      c.tag,
+			Users:    added,
+			NodeInfo: c.info,
+		})
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
