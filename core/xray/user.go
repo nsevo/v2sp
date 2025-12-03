@@ -3,12 +3,14 @@ package xray
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nsevo/v2sp/api/panel"
 	"github.com/nsevo/v2sp/common/counter"
 	"github.com/nsevo/v2sp/common/format"
 	vCore "github.com/nsevo/v2sp/core"
 	"github.com/nsevo/v2sp/core/xray/app/mydispatcher"
+	log "github.com/sirupsen/logrus"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/proxy"
 )
@@ -109,8 +111,14 @@ func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 }
 
 func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
+	startTotal := time.Now()
+	userCount := len(p.Users)
+
+	log.Infof("[%s] Step 1/4: Building %d protocol users...", p.Tag, userCount)
+	startBuild := time.Now()
+
 	// Step 1: Build protocol users without lock (CPU-bound, can be done in parallel)
-	users := make([]*protocol.User, 0, len(p.Users))
+	var users []*protocol.User
 	switch p.NodeInfo.Type {
 	case "vmess":
 		users = buildVmessUsers(p.Tag, p.Users)
@@ -126,30 +134,55 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	default:
 		return 0, fmt.Errorf("unsupported node type: %s", p.NodeInfo.Type)
 	}
+	log.Infof("[%s] Step 1 completed in %v", p.Tag, time.Since(startBuild).Truncate(time.Millisecond))
 
 	// Step 2: Get UserManager before locking
+	log.Infof("[%s] Step 2/4: Getting UserManager...", p.Tag)
 	man, err := c.GetUserManager(p.Tag)
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
 
 	// Step 3: Update uidMap with minimal lock time
+	log.Infof("[%s] Step 3/4: Updating uidMap...", p.Tag)
+	startMap := time.Now()
 	c.users.mapLock.Lock()
 	for i := range p.Users {
 		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
 	}
 	c.users.mapLock.Unlock()
+	log.Infof("[%s] Step 3 completed in %v", p.Tag, time.Since(startMap).Truncate(time.Millisecond))
 
 	// Step 4: Add users to manager without holding our lock (UserManager has its own locking)
-	for _, u := range users {
+	log.Infof("[%s] Step 4/4: Adding %d users to Xray UserManager (this may take a while)...", p.Tag, userCount)
+	startAdd := time.Now()
+	progressInterval := userCount / 10 // Log every 10%
+	if progressInterval < 1000 {
+		progressInterval = 1000
+	}
+
+	for i, u := range users {
 		mUser, err := u.ToMemoryUser()
 		if err != nil {
 			return 0, err
 		}
 		err = man.AddUser(context.Background(), mUser)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("failed at user %d/%d: %s", i+1, userCount, err)
+		}
+
+		// Progress logging
+		if (i+1)%progressInterval == 0 || i+1 == userCount {
+			progress := ((i + 1) * 100) / userCount
+			elapsed := time.Since(startAdd)
+			log.Infof("[%s] Progress: %d%% (%d/%d users, elapsed: %v)",
+				p.Tag, progress, i+1, userCount, elapsed.Truncate(time.Second))
 		}
 	}
+	addDuration := time.Since(startAdd)
+	log.Infof("[%s] Step 4 completed in %v (%.0f users/sec)",
+		p.Tag, addDuration.Truncate(time.Millisecond), float64(userCount)/addDuration.Seconds())
+
+	log.Infof("[%s] Total import completed in %v", p.Tag, time.Since(startTotal).Truncate(time.Millisecond))
 	return len(users), nil
 }

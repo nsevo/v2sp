@@ -93,6 +93,11 @@ func (c *Controller) Start() error {
 		NodeInfo: node,
 	})
 	if err != nil {
+		log.WithFields(log.Fields{
+			"tag":     c.tag,
+			"err":     err,
+			"elapsed": time.Since(start),
+		}).Error("Add users failed")
 		return fmt.Errorf("add users error: %s", err)
 	}
 	log.WithFields(log.Fields{
