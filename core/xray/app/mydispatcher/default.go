@@ -35,6 +35,17 @@ import (
 
 var errSniffingTimeout = errors.New("timeout on sniffing")
 
+const (
+	connBurstMin        = 2
+	connBurstMax        = 8
+	connQueueTimeout    = 500 * time.Millisecond
+	connQueueInterval   = 50 * time.Millisecond
+	connCleanupScan     = 8
+	tcpIdleTimeout      = 30 * time.Second
+	udpIdleTimeout      = 15 * time.Second
+	touchThrottleWindow = 200 * time.Millisecond
+)
+
 type cachedReader struct {
 	sync.Mutex
 	reader buf.TimeoutReader
@@ -109,6 +120,77 @@ type DefaultDispatcher struct {
 	fdns         dns.FakeDNSEngine
 	Counter      sync.Map
 	LinkManagers sync.Map // map[string]*LinkManager
+}
+
+func calcConnBurst(limit int) int {
+	burst := limit / 2
+	if burst < connBurstMin {
+		return connBurstMin
+	}
+	if burst > connBurstMax {
+		return connBurstMax
+	}
+	return burst
+}
+
+func idleTimeoutByNetwork(network net.Network) time.Duration {
+	if network == net.Network_TCP {
+		return tcpIdleTimeout
+	}
+	return udpIdleTimeout
+}
+
+func (d *DefaultDispatcher) getLinkManager(email string) *LinkManager {
+	if lmloaded, ok := d.LinkManagers.Load(email); ok {
+		return lmloaded.(*LinkManager)
+	}
+	lm := NewLinkManager()
+	d.LinkManagers.Store(email, lm)
+	return lm
+}
+
+// enforceConnLimit tries to honor conn_limit with burst + idle cleanup + short queue.
+func (d *DefaultDispatcher) enforceConnLimit(ctx context.Context, lm *LinkManager, userLimit *limiter.UserLimitInfo, network net.Network) error {
+	base := userLimit.ConnLimit
+	if base <= 0 {
+		return nil
+	}
+
+	burst := calcConnBurst(base)
+	idleTimeout := idleTimeoutByNetwork(network)
+	deadline := time.Now().Add(connQueueTimeout)
+
+	for {
+		current := lm.GetConnectionCount()
+		if current < base {
+			return nil
+		}
+
+		// Try to reclaim idle connections when over base.
+		if current >= base {
+			lm.CleanupIdle(connCleanupScan, idleTimeout)
+			current = lm.GetConnectionCount()
+			if current < base {
+				return nil
+			}
+		}
+
+		// Allow short burst capacity.
+		if current < base+burst {
+			return nil
+		}
+
+		// High pressure: wait a short period for slots to free.
+		if time.Now().After(deadline) {
+			return errors.New("connection limit exceeded")
+		}
+		select {
+		case <-time.After(connQueueInterval):
+			continue
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func init() {
@@ -194,24 +276,16 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			common.Interrupt(inboundLink.Reader)
 			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = NewLinkManager()
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
-			// Check connection limit and replace oldest if needed
-			if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
-				userLimit := v.(*limiter.UserLimitInfo)
-				if userLimit.ConnLimit > 0 {
-					currentConns := lm.GetConnectionCount()
-					if currentConns >= userLimit.ConnLimit {
-						// Remove the oldest connection to make room for the new one
-						if lm.RemoveOldest() {
-							errors.LogInfo(ctx, "Replaced oldest connection for ", user.Email, " (limit: ", userLimit.ConnLimit, ")")
-						}
-					}
-				}
+		lm := d.getLinkManager(user.Email)
+		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
+			userLimit := v.(*limiter.UserLimitInfo)
+			if err := d.enforceConnLimit(ctx, lm, userLimit, network); err != nil {
+				errors.LogInfo(ctx, "Limited ", user.Email, " by conn limit: ", err)
+				common.Close(outboundLink.Writer)
+				common.Close(inboundLink.Writer)
+				common.Interrupt(outboundLink.Reader)
+				common.Interrupt(inboundLink.Reader)
+				return nil, nil, nil, err
 			}
 		}
 		managedWriter := &ManagedWriter{
@@ -400,24 +474,14 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
-		var lm *LinkManager
-		if lmloaded, ok := d.LinkManagers.Load(user.Email); !ok {
-			lm = NewLinkManager()
-			d.LinkManagers.Store(user.Email, lm)
-		} else {
-			lm = lmloaded.(*LinkManager)
-			// Check connection limit and replace oldest if needed
-			if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
-				userLimit := v.(*limiter.UserLimitInfo)
-				if userLimit.ConnLimit > 0 {
-					currentConns := lm.GetConnectionCount()
-					if currentConns >= userLimit.ConnLimit {
-						// Remove the oldest connection to make room for the new one
-						if lm.RemoveOldest() {
-							errors.LogInfo(ctx, "Replaced oldest connection for ", user.Email, " (limit: ", userLimit.ConnLimit, ")")
-						}
-					}
-				}
+		lm := d.getLinkManager(user.Email)
+		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
+			userLimit := v.(*limiter.UserLimitInfo)
+			if err := d.enforceConnLimit(ctx, lm, userLimit, destination.Network); err != nil {
+				errors.LogInfo(ctx, "Limited ", user.Email, " by conn limit: ", err)
+				common.Close(outbound.Writer)
+				common.Interrupt(outbound.Reader)
+				return err
 			}
 		}
 		managedWriter := &ManagedWriter{

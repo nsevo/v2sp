@@ -97,19 +97,6 @@ v2sp uses official Xray-core with elegant Dispatcher extension:
               └────────────┬────────────┘
                            │
          ┌─────────────────┼─────────────────┐
-         │                 │                 │
-    ┌────▼────┐      ┌────▼────┐      ┌────▼────┐
-    │ Limiter │      │ Counter │      │   Core  │
-    │         │      │         │      │         │
-    └─────────┘      └─────────┘      └────┬────┘
-                                           │
-                                    ┌──────▼──────┐
-                                    │  Xray Core  │
-                                    │  (official) │
-                                    │             │
-                                    │ + Dispatcher│
-                                    │  Extension  │
-                                    └─────────────┘
 ```
 
 ### Supported Protocols
@@ -120,7 +107,6 @@ v2sp uses official Xray-core with elegant Dispatcher extension:
 | vmess | Optional | VMess with AEAD encryption |
 | trojan | Required | Trojan protocol |
 | shadowsocks | None | Shadowsocks 2022 support |
-| hysteria | Required | Hysteria v1 (Xray native) |
 
 ### Fault Tolerance
 
@@ -207,7 +193,6 @@ The API MUST return `node_type` field:
 | `vmess` | VMess protocol |
 | `trojan` | Trojan protocol |
 | `shadowsocks` | Shadowsocks protocol |
-| `hysteria` | Hysteria v1 protocol |
 
 **Example Response**
 ```json

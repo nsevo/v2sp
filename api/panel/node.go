@@ -32,7 +32,6 @@ type NodeInfo struct {
 	VAllss      *VAllssNode
 	Shadowsocks *ShadowsocksNode
 	Trojan      *TrojanNode
-	Hysteria    *HysteriaNode
 	Common      *CommonNode
 }
 
@@ -107,13 +106,6 @@ type TrojanNode struct {
 	CommonNode
 	Network         string          `json:"network"`
 	NetworkSettings json.RawMessage `json:"networkSettings"`
-}
-
-type HysteriaNode struct {
-	CommonNode
-	UpMbps   int    `json:"up_mbps"`
-	DownMbps int    `json:"down_mbps"`
-	Obfs     string `json:"obfs"`
 }
 
 type RawDNS struct {
@@ -220,15 +212,6 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		}
 		cm = &rsp.CommonNode
 		node.Trojan = rsp
-		node.Security = Tls
-	case "hysteria":
-		rsp := &HysteriaNode{}
-		err = json.Unmarshal(r.Body(), rsp)
-		if err != nil {
-			return nil, fmt.Errorf("decode hysteria params error: %s", err)
-		}
-		cm = &rsp.CommonNode
-		node.Hysteria = rsp
 		node.Security = Tls
 	default:
 		return nil, fmt.Errorf("unsupported node type: %s", nodeType)

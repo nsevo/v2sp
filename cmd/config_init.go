@@ -313,7 +313,7 @@ func fetchNodeInfo(apiURL, apiKey string, nodeID int) (*NodeInfo, error) {
 // checkTLSRequirement 检查 TLS 证书需求
 func checkTLSRequirement(nodeType string, tls int) string {
 	switch strings.ToLower(nodeType) {
-	case "trojan", "hysteria":
+	case "trojan":
 		// 这些协议总是需要 TLS
 		return CertRequired
 	case "shadowsocks":
