@@ -37,18 +37,20 @@ import (
 var errSniffingTimeout = errors.New("timeout on sniffing")
 
 const (
-	connBurstMin         = 2
-	connBurstMax         = 8
-	connSafetyMargin     = 3
+	connBurstMin         = 1
+	connBurstMax         = 4
+	connSafetyMargin     = 1
 	connCleanupScan      = 8
-	tcpIdleTimeout       = 30 * time.Second
-	udpIdleTimeout       = 15 * time.Second
+	tcpIdleTimeout       = 15 * time.Second
+	udpIdleTimeout       = 8 * time.Second
 	touchThrottleWindow  = 200 * time.Millisecond
-	connConvergeDelayTCP = 1500 * time.Millisecond
-	connConvergeDelayUDP = 700 * time.Millisecond
+	connConvergeDelayTCP = 700 * time.Millisecond
+	connConvergeDelayUDP = 400 * time.Millisecond
 	userIdleTimeout      = 10 * time.Minute
 	userCleanupInterval  = time.Minute
 	userCleanupBatch     = 200
+	pruneBatchMin        = 5
+	pruneBatchMax        = 200
 )
 
 type cachedReader struct {
@@ -136,7 +138,7 @@ type userConnState struct {
 }
 
 func calcConnBurst(limit int) int {
-	burst := limit / 2
+	burst := limit / 3
 	if burst < connBurstMin {
 		return connBurstMin
 	}
@@ -241,22 +243,34 @@ func (d *DefaultDispatcher) pruneToCap(lm *LinkManager, cap int, idleTimeout tim
 		return
 	}
 
-	for i := 0; i < 3; i++ { // hard cap loop to avoid long blocking
+	for iter := 0; iter < 5; iter++ { // bounded loop to avoid long blocking
 		current := lm.GetConnectionCount()
 		if current <= cap {
 			return
 		}
 		excess := current - cap
 
-		// Prefer closing idle connections; scan enough to cover excess.
-		closedIdle := lm.CleanupIdle(excess*2, idleTimeout)
-		if closedIdle >= excess {
-			return
+		// Decide batch size based on excess, with sane bounds.
+		batch := excess / 2
+		if batch < pruneBatchMin {
+			batch = pruneBatchMin
+		}
+		if batch > pruneBatchMax {
+			batch = pruneBatchMax
+		}
+		if batch > excess {
+			batch = excess
 		}
 
-		remaining := excess - closedIdle
+		closedIdle := lm.CleanupIdle(batch*2, idleTimeout)
+		remaining := batch - closedIdle
 		if remaining > 0 {
 			lm.CloseOldestN(remaining)
+		}
+
+		// If we didn't close anything, break to avoid spinning.
+		if closedIdle == 0 && remaining == batch {
+			return
 		}
 	}
 }
