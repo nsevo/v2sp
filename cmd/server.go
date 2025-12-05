@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -61,6 +63,17 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		}
 		log.SetOutput(f)
 	}
+
+	// Optional pprof listener (disabled by default). Set PPROF_ADDR (e.g. 127.0.0.1:6060 or 0.0.0.0:6060) to enable.
+	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
+		go func() {
+			log.Infof("pprof listening on %s", addr)
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				log.WithField("err", err).Warn("pprof server exited")
+			}
+		}()
+	}
+
 	limiter.Init()
 	log.Info("Start v2sp...")
 	vc, err := vCore.NewCore(c.CoresConfig)
