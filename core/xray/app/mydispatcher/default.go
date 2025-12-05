@@ -36,14 +36,15 @@ import (
 var errSniffingTimeout = errors.New("timeout on sniffing")
 
 const (
-	connBurstMin        = 2
-	connBurstMax        = 8
-	connQueueTimeout    = 500 * time.Millisecond
-	connQueueInterval   = 50 * time.Millisecond
-	connCleanupScan     = 8
-	tcpIdleTimeout      = 30 * time.Second
-	udpIdleTimeout      = 15 * time.Second
-	touchThrottleWindow = 200 * time.Millisecond
+	connBurstMin         = 2
+	connBurstMax         = 8
+	connSafetyMargin     = 3
+	connCleanupScan      = 8
+	tcpIdleTimeout       = 30 * time.Second
+	udpIdleTimeout       = 15 * time.Second
+	touchThrottleWindow  = 200 * time.Millisecond
+	connConvergeDelayTCP = 1500 * time.Millisecond
+	connConvergeDelayUDP = 700 * time.Millisecond
 )
 
 type cachedReader struct {
@@ -120,6 +121,12 @@ type DefaultDispatcher struct {
 	fdns         dns.FakeDNSEngine
 	Counter      sync.Map
 	LinkManagers sync.Map // map[string]*LinkManager
+	connStates   sync.Map // map[string]*userConnState
+}
+
+type userConnState struct {
+	mu         sync.Mutex
+	tightening bool
 }
 
 func calcConnBurst(limit int) int {
@@ -140,6 +147,13 @@ func idleTimeoutByNetwork(network net.Network) time.Duration {
 	return udpIdleTimeout
 }
 
+func convergenceDelayByNetwork(network net.Network) time.Duration {
+	if network == net.Network_TCP {
+		return connConvergeDelayTCP
+	}
+	return connConvergeDelayUDP
+}
+
 func (d *DefaultDispatcher) getLinkManager(email string) *LinkManager {
 	if lmloaded, ok := d.LinkManagers.Load(email); ok {
 		return lmloaded.(*LinkManager)
@@ -149,47 +163,88 @@ func (d *DefaultDispatcher) getLinkManager(email string) *LinkManager {
 	return lm
 }
 
-// enforceConnLimit tries to honor conn_limit with burst + idle cleanup + short queue.
-func (d *DefaultDispatcher) enforceConnLimit(ctx context.Context, lm *LinkManager, userLimit *limiter.UserLimitInfo, network net.Network) error {
-	base := userLimit.ConnLimit
-	if base <= 0 {
-		return nil
+func (d *DefaultDispatcher) getConnState(email string) *userConnState {
+	if v, ok := d.connStates.Load(email); ok {
+		return v.(*userConnState)
+	}
+	state := &userConnState{}
+	d.connStates.Store(email, state)
+	return state
+}
+
+// pruneToCap closes idle connections first, then oldest, until <= cap.
+func (d *DefaultDispatcher) pruneToCap(lm *LinkManager, cap int, idleTimeout time.Duration) {
+	if cap <= 0 {
+		return
 	}
 
-	burst := calcConnBurst(base)
-	idleTimeout := idleTimeoutByNetwork(network)
-	deadline := time.Now().Add(connQueueTimeout)
-
-	for {
+	for i := 0; i < 3; i++ { // hard cap loop to avoid long blocking
 		current := lm.GetConnectionCount()
-		if current < base {
-			return nil
+		if current <= cap {
+			return
+		}
+		excess := current - cap
+
+		// Prefer closing idle connections; scan enough to cover excess.
+		closedIdle := lm.CleanupIdle(excess*2, idleTimeout)
+		if closedIdle >= excess {
+			return
 		}
 
-		// Try to reclaim idle connections when over base.
-		if current >= base {
-			lm.CleanupIdle(connCleanupScan, idleTimeout)
-			current = lm.GetConnectionCount()
-			if current < base {
-				return nil
-			}
+		remaining := excess - closedIdle
+		if remaining > 0 {
+			lm.CloseOldestN(remaining)
 		}
+	}
+}
 
-		// Allow short burst capacity.
-		if current < base+burst {
-			return nil
-		}
+// scheduleTighten asynchronously shrinks connections back toward base+burst.
+func (d *DefaultDispatcher) scheduleTighten(email string, lm *LinkManager, base int, burst int, idleTimeout time.Duration, network net.Network) {
+	state := d.getConnState(email)
+	state.mu.Lock()
+	if state.tightening {
+		state.mu.Unlock()
+		return
+	}
+	state.tightening = true
+	state.mu.Unlock()
 
-		// High pressure: wait a short period for slots to free.
-		if time.Now().After(deadline) {
-			return errors.New("connection limit exceeded")
-		}
-		select {
-		case <-time.After(connQueueInterval):
-			continue
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	go func() {
+		defer func() {
+			state.mu.Lock()
+			state.tightening = false
+			state.mu.Unlock()
+		}()
+
+		delay := convergenceDelayByNetwork(network)
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+
+		target := base + burst
+		hardCap := target + connSafetyMargin
+		d.pruneToCap(lm, hardCap, idleTimeout)
+		d.pruneToCap(lm, target, idleTimeout)
+	}()
+}
+
+// handleConnLimit allows new connections, then asynchronously tightens to limits by closing old ones.
+func (d *DefaultDispatcher) handleConnLimit(email string, lm *LinkManager, userLimit *limiter.UserLimitInfo, network net.Network) {
+	base := userLimit.ConnLimit
+	if base <= 0 {
+		return
+	}
+
+	idleTimeout := idleTimeoutByNetwork(network)
+	burst := calcConnBurst(base)
+	hardCap := base + burst + connSafetyMargin
+
+	// Fast protective trim to hard cap (close idle/oldest), but never reject new connection.
+	d.pruneToCap(lm, hardCap, idleTimeout)
+
+	// If still above base, schedule async tightening back toward base+burst.
+	if lm.GetConnectionCount() > base {
+		d.scheduleTighten(email, lm, base, burst, idleTimeout, network)
 	}
 }
 
@@ -277,16 +332,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn or ip")
 		}
 		lm := d.getLinkManager(user.Email)
+		var userLimit *limiter.UserLimitInfo
 		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
-			userLimit := v.(*limiter.UserLimitInfo)
-			if err := d.enforceConnLimit(ctx, lm, userLimit, network); err != nil {
-				errors.LogInfo(ctx, "Limited ", user.Email, " by conn limit: ", err)
-				common.Close(outboundLink.Writer)
-				common.Close(inboundLink.Writer)
-				common.Interrupt(outboundLink.Reader)
-				common.Interrupt(inboundLink.Reader)
-				return nil, nil, nil, err
-			}
+			userLimit = v.(*limiter.UserLimitInfo)
 		}
 		managedWriter := &ManagedWriter{
 			writer:     uplinkWriter,
@@ -294,6 +342,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			createTime: time.Now(),
 		}
 		lm.AddLink(managedWriter, outboundLink.Reader)
+		if userLimit != nil {
+			d.handleConnLimit(user.Email, lm, userLimit, network)
+		}
 		inboundLink.Writer = managedWriter
 		if w != nil {
 			sessionInbound.CanSpliceCopy = 3
@@ -475,14 +526,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			return errors.New("Limited ", user.Email, " by conn or ip")
 		}
 		lm := d.getLinkManager(user.Email)
+		var userLimit *limiter.UserLimitInfo
 		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
-			userLimit := v.(*limiter.UserLimitInfo)
-			if err := d.enforceConnLimit(ctx, lm, userLimit, destination.Network); err != nil {
-				errors.LogInfo(ctx, "Limited ", user.Email, " by conn limit: ", err)
-				common.Close(outbound.Writer)
-				common.Interrupt(outbound.Reader)
-				return err
-			}
+			userLimit = v.(*limiter.UserLimitInfo)
 		}
 		managedWriter := &ManagedWriter{
 			writer:     outbound.Writer,
@@ -509,6 +555,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Counter: &ts.UpCounter,
 		}
 		lm.AddLink(managedWriter, outbound.Reader)
+		if userLimit != nil {
+			d.handleConnLimit(user.Email, lm, userLimit, destination.Network)
+		}
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
 			Writer:  outbound.Writer,

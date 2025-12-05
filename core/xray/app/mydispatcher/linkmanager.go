@@ -118,6 +118,32 @@ func (m *LinkManager) RemoveOldest() bool {
 	return true
 }
 
+// CloseOldestN closes up to n oldest connections (including active ones).
+// Returns the number of connections closed.
+func (m *LinkManager) CloseOldestN(n int) int {
+	if n <= 0 {
+		return 0
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	closed := 0
+	for elem := m.links.Front(); elem != nil && closed < n; {
+		next := elem.Next()
+		entry := elem.Value.(*linkEntry)
+		m.links.Remove(elem)
+		entry.writer.element = nil
+		delete(m.index, entry.writer)
+		common.Close(entry.writer.writer)
+		common.Interrupt(entry.reader)
+		closed++
+		elem = next
+	}
+
+	return closed
+}
+
 // touch updates activity and occasionally moves the connection to the back (LRU).
 func (m *LinkManager) touch(writer *ManagedWriter) {
 	now := time.Now().UnixNano()
