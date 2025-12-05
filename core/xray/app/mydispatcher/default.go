@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nsevo/v2sp/common/counter"
@@ -45,6 +46,9 @@ const (
 	touchThrottleWindow  = 200 * time.Millisecond
 	connConvergeDelayTCP = 1500 * time.Millisecond
 	connConvergeDelayUDP = 700 * time.Millisecond
+	userIdleTimeout      = 10 * time.Minute
+	userCleanupInterval  = time.Minute
+	userCleanupBatch     = 200
 )
 
 type cachedReader struct {
@@ -127,6 +131,8 @@ type DefaultDispatcher struct {
 type userConnState struct {
 	mu         sync.Mutex
 	tightening bool
+	tag        string
+	lastActive atomic.Int64
 }
 
 func calcConnBurst(limit int) int {
@@ -170,6 +176,63 @@ func (d *DefaultDispatcher) getConnState(email string) *userConnState {
 	state := &userConnState{}
 	d.connStates.Store(email, state)
 	return state
+}
+
+// userCleanupLoop periodically removes idle users (no connections, idle past threshold) to free memory.
+func (d *DefaultDispatcher) userCleanupLoop() {
+	ticker := time.NewTicker(userCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		remaining := userCleanupBatch
+		d.LinkManagers.Range(func(key, value interface{}) bool {
+			if remaining <= 0 {
+				return false
+			}
+			email := key.(string)
+			lm := value.(*LinkManager)
+			if lm.GetConnectionCount() > 0 {
+				return true
+			}
+			if v, ok := d.connStates.Load(email); ok {
+				state := v.(*userConnState)
+				last := state.lastActive.Load()
+				if last == 0 {
+					return true
+				}
+				if now.Sub(time.Unix(0, last)) > userIdleTimeout {
+					state.mu.Lock()
+					tag := state.tag
+					state.mu.Unlock()
+					d.cleanupUserResources(email, tag)
+					remaining--
+				}
+			}
+			return true
+		})
+	}
+}
+
+func (d *DefaultDispatcher) markUserActive(email, tag string, now time.Time) *userConnState {
+	state := d.getConnState(email)
+	state.lastActive.Store(now.UnixNano())
+	state.mu.Lock()
+	state.tag = tag
+	state.mu.Unlock()
+	return state
+}
+
+func (d *DefaultDispatcher) cleanupUserResources(email, tag string) {
+	if v, ok := d.LinkManagers.Load(email); ok {
+		lm := v.(*LinkManager)
+		lm.CloseAll()
+		d.LinkManagers.Delete(email)
+	}
+	if c, ok := d.Counter.Load(tag); ok {
+		tc := c.(*counter.TrafficCounter)
+		tc.Delete(email)
+	}
+	d.connStates.Delete(email)
 }
 
 // pruneToCap closes idle connections first, then oldest, until <= cap.
@@ -235,6 +298,9 @@ func (d *DefaultDispatcher) handleConnLimit(email string, lm *LinkManager, userL
 		return
 	}
 
+	state := d.getConnState(email)
+	state.lastActive.Store(time.Now().UnixNano())
+
 	idleTimeout := idleTimeoutByNetwork(network)
 	burst := calcConnBurst(base)
 	hardCap := base + burst + connSafetyMargin
@@ -269,6 +335,7 @@ func (d *DefaultDispatcher) Init(config *Config, om outbound.Manager, router rou
 	d.router = router
 	d.policy = pm
 	d.stats = sm
+	go d.userCleanupLoop()
 	return nil
 }
 
@@ -336,6 +403,7 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
 			userLimit = v.(*limiter.UserLimitInfo)
 		}
+		d.markUserActive(user.Email, sessionInbound.Tag, time.Now())
 		managedWriter := &ManagedWriter{
 			writer:     uplinkWriter,
 			manager:    lm,
@@ -530,6 +598,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		if v, ok := limit.UserLimitInfo.Load(user.Email); ok {
 			userLimit = v.(*limiter.UserLimitInfo)
 		}
+		d.markUserActive(user.Email, sessionInbound.Tag, time.Now())
 		managedWriter := &ManagedWriter{
 			writer:     outbound.Writer,
 			manager:    lm,
