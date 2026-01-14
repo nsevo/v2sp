@@ -1,6 +1,7 @@
 package node
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/nsevo/v2sp/api/panel"
@@ -45,51 +46,94 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 			Interval: time.Duration(c.LimitConfig.DynamicSpeedLimitConfig.Periodic) * time.Second,
 			Execute:  c.SpeedChecker,
 		}
-		log.Printf("[%s: %d] Start dynamic speed limit", c.apiClient.NodeType, c.apiClient.NodeId)
+		log.WithFields(log.Fields{
+			"tag":     c.tag,
+			"node_id": c.apiClient.NodeId,
+			"period":  c.dynamicSpeedLimitPeriodic.Interval,
+		}).Info("Start dynamic speed limit")
+		_ = c.dynamicSpeedLimitPeriodic.Start(false)
 	}
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
+	roundStart := time.Now()
 	// get node info
+	t0 := time.Now()
 	newN, err := c.apiClient.GetNodeInfo()
+	dNode := time.Since(t0)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
+			"dur": dNode.Truncate(time.Millisecond),
 		}).Warn("Get node info failed, will retry next interval")
 		return nil
 	}
 	// get user info
+	t1 := time.Now()
 	newU, err := c.apiClient.GetUserList()
+	dUsers := time.Since(t1)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
+			"dur": dUsers.Truncate(time.Millisecond),
 		}).Warn("Get user list failed, will retry next interval")
 		return nil
 	}
 	// get user alive
+	t2 := time.Now()
 	newA, err := c.apiClient.GetUserAlive()
+	dAlive := time.Since(t2)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
+			"dur": dAlive.Truncate(time.Millisecond),
 		}).Warn("Get alive list failed, will retry next interval")
 		return nil
 	}
+
+	// Baseline per-round stats (low frequency)
+	{
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		log.WithFields(log.Fields{
+			"tag":        c.tag,
+			"node_id":    c.apiClient.NodeId,
+			"node_type":  c.apiClient.NodeType,
+			"config_304": newN == nil,
+			"users_304":  newU == nil,
+			"alive_keys": len(newA),
+			"dur_config": dNode.Truncate(time.Millisecond),
+			"dur_users":  dUsers.Truncate(time.Millisecond),
+			"dur_alive":  dAlive.Truncate(time.Millisecond),
+			"dur_total":  time.Since(roundStart).Truncate(time.Millisecond),
+			"goroutines": runtime.NumGoroutine(),
+			"heap_alloc": ms.HeapAlloc,
+			"sys":        ms.Sys,
+		}).Debug("Node monitor round (baseline)")
+	}
+
 	if newN != nil {
+		oldTag := c.tag
+		newTag := oldTag
 		c.info = newN
 		// nodeInfo changed
 		if newU != nil {
 			c.userList = newU
 		}
+		if c.LimitConfig.EnableDynamicSpeedLimit {
 		c.traffic = make(map[string]int64)
+		} else {
+			c.traffic = nil
+		}
 		// Remove old node
-		log.WithField("tag", c.tag).Info("Node changed, reload")
-		err = c.server.DelNode(c.tag)
+		log.WithField("tag", oldTag).Info("Node changed, reload")
+		err = c.server.DelNode(oldTag)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"tag": c.tag,
+				"tag": oldTag,
 				"err": err,
 			}).Error("Delete node failed, will retry next interval")
 			return nil
@@ -97,12 +141,15 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 
 		// Update limiter
 		if len(c.Options.Name) == 0 {
-			c.tag = c.buildNodeTag(newN)
-			// Remove Old limiter
-			limiter.DeleteLimiter(c.tag)
-			// Add new Limiter
-			l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, newA)
-			c.limiter = l
+			newTag = c.buildNodeTag(newN)
+			// Remove old limiter (keyed by oldTag), then create a fresh limiter for newTag.
+			// IMPORTANT: do not delete by newTag, or we may leak the old limiter.
+			if newTag != oldTag {
+				limiter.DeleteLimiter(oldTag)
+			}
+			// Switch tag only after old resources are removed.
+			c.tag = newTag
+			c.limiter = limiter.AddLimiter(newTag, &c.LimitConfig, c.userList, newA)
 		}
 		// update alive list
 		if newA != nil {

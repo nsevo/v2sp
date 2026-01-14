@@ -3,7 +3,6 @@ package mydispatcher
 import (
 	"container/list"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/xtls/xray-core/common"
@@ -15,13 +14,9 @@ type ManagedWriter struct {
 	manager    *LinkManager
 	createTime time.Time
 	element    *list.Element // Reference to list element for O(1) removal
-	// Activity tracking for idle cleanup and LRU ordering
-	lastActive atomic.Int64
-	lastMoved  atomic.Int64
 }
 
 func (w *ManagedWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
-	w.manager.touch(w)
 	return w.writer.WriteMultiBuffer(mb)
 }
 
@@ -52,9 +47,6 @@ func NewLinkManager() *LinkManager {
 }
 
 func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader) {
-	now := time.Now().UnixNano()
-	writer.lastActive.Store(now)
-	writer.lastMoved.Store(now)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -95,100 +87,4 @@ func (m *LinkManager) GetConnectionCount() int {
 	return m.links.Len()
 }
 
-// RemoveOldest removes the oldest connection. O(1) operation.
-func (m *LinkManager) RemoveOldest() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Get the oldest (front of list)
-	front := m.links.Front()
-	if front == nil {
-		return false
-	}
-
-	entry := front.Value.(*linkEntry)
-	m.links.Remove(front)
-	entry.writer.element = nil
-	delete(m.index, entry.writer)
-
-	// Close the connection
-	common.Close(entry.writer.writer)
-	common.Interrupt(entry.reader)
-
-	return true
-}
-
-// CloseOldestN closes up to n oldest connections (including active ones).
-// Returns the number of connections closed.
-func (m *LinkManager) CloseOldestN(n int) int {
-	if n <= 0 {
-		return 0
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	closed := 0
-	for elem := m.links.Front(); elem != nil && closed < n; {
-		next := elem.Next()
-		entry := elem.Value.(*linkEntry)
-		m.links.Remove(elem)
-		entry.writer.element = nil
-		delete(m.index, entry.writer)
-		common.Close(entry.writer.writer)
-		common.Interrupt(entry.reader)
-		closed++
-		elem = next
-	}
-
-	return closed
-}
-
-// touch updates activity and occasionally moves the connection to the back (LRU).
-func (m *LinkManager) touch(writer *ManagedWriter) {
-	now := time.Now().UnixNano()
-	writer.lastActive.Store(now)
-
-	// Throttle expensive move operations.
-	if now-writer.lastMoved.Load() < int64(touchThrottleWindow) {
-		return
-	}
-	writer.lastMoved.Store(now)
-
-	m.mu.Lock()
-	if writer.element != nil {
-		m.links.MoveToBack(writer.element)
-	}
-	m.mu.Unlock()
-}
-
-// CleanupIdle scans up to maxScan oldest entries and closes those idle beyond idleTimeout.
-// Returns number of connections closed.
-func (m *LinkManager) CleanupIdle(maxScan int, idleTimeout time.Duration) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if maxScan <= 0 {
-		return 0
-	}
-
-	now := time.Now()
-	closed := 0
-	scanned := 0
-	for elem := m.links.Front(); elem != nil && scanned < maxScan; {
-		next := elem.Next()
-		entry := elem.Value.(*linkEntry)
-		last := time.Unix(0, entry.writer.lastActive.Load())
-		if now.Sub(last) > idleTimeout {
-			m.links.Remove(elem)
-			entry.writer.element = nil
-			delete(m.index, entry.writer)
-			common.Close(entry.writer.writer)
-			common.Interrupt(entry.reader)
-			closed++
-		}
-		scanned++
-		elem = next
-	}
-	return closed
-}
+// NOTE: We intentionally do not implement any connection limiting here.

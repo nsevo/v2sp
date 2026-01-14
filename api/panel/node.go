@@ -1,10 +1,7 @@
 package panel
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -44,14 +41,14 @@ type CommonNode struct {
 }
 
 type Route struct {
-	Id          int         `json:"id"`
-	Match       interface{} `json:"match"`
-	Action      string      `json:"action"`
-	ActionValue string      `json:"action_value"`
+	Id          int      `json:"id"`
+	Match       []string `json:"match"`
+	Action      string   `json:"action"`
+	ActionValue string   `json:"action_value"`
 }
 type BaseConfig struct {
-	PushInterval any `json:"push_interval"`
-	PullInterval any `json:"pull_interval"`
+	PushInterval int `json:"push_interval"`
+	PullInterval int `json:"pull_interval"`
 }
 
 // VAllssNode is vmess and vless node info
@@ -130,12 +127,6 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	if r.StatusCode() == 304 {
 		return nil, nil
 	}
-	hash := sha256.Sum256(r.Body())
-	newBodyHash := hex.EncodeToString(hash[:])
-	if c.responseBodyHash == newBodyHash {
-		return nil, nil
-	}
-	c.responseBodyHash = newBodyHash
 	c.nodeEtag = r.Header().Get("ETag")
 	if err = c.checkResponse(r, action, err); err != nil {
 		return nil, err
@@ -219,18 +210,7 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 
 	// parse rules and dns
 	for i := range cm.Routes {
-		var matchs []string
-		if _, ok := cm.Routes[i].Match.(string); ok {
-			matchs = strings.Split(cm.Routes[i].Match.(string), ",")
-		} else if _, ok = cm.Routes[i].Match.([]string); ok {
-			matchs = cm.Routes[i].Match.([]string)
-		} else {
-			temp := cm.Routes[i].Match.([]interface{})
-			matchs = make([]string, len(temp))
-			for i := range temp {
-				matchs[i] = temp[i].(string)
-			}
-		}
+		matchs := cm.Routes[i].Match
 		switch cm.Routes[i].Action {
 		case "block":
 			for _, v := range matchs {
@@ -245,7 +225,7 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 		case "dns":
 			var domains []string
 			domains = append(domains, matchs...)
-			if matchs[0] != "main" {
+			if len(matchs) > 0 && matchs[0] != "main" {
 				node.RawDNS.DNSMap[strconv.Itoa(i)] = map[string]interface{}{
 					"address": cm.Routes[i].ActionValue,
 					"domains": domains,
@@ -258,8 +238,21 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	}
 
 	// set interval
-	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
-	node.PullInterval = intervalToTime(cm.BaseConfig.PullInterval)
+	if cm.BaseConfig != nil {
+		if cm.BaseConfig.PushInterval > 0 {
+			node.PushInterval = time.Duration(cm.BaseConfig.PushInterval) * time.Second
+		} else {
+			node.PushInterval = 60 * time.Second
+		}
+		if cm.BaseConfig.PullInterval > 0 {
+			node.PullInterval = time.Duration(cm.BaseConfig.PullInterval) * time.Second
+		} else {
+			node.PullInterval = 60 * time.Second
+		}
+	} else {
+		node.PushInterval = 60 * time.Second
+		node.PullInterval = 60 * time.Second
+	}
 
 	node.Common = cm
 	// clear
@@ -267,30 +260,4 @@ func (c *Client) GetNodeInfo() (node *NodeInfo, err error) {
 	cm.BaseConfig = nil
 
 	return node, nil
-}
-
-func intervalToTime(i interface{}) time.Duration {
-	if i == nil {
-		return 60 * time.Second // Default interval
-	}
-	switch v := i.(type) {
-	case int:
-		return time.Duration(v) * time.Second
-	case int64:
-		return time.Duration(v) * time.Second
-	case float64:
-		return time.Duration(v) * time.Second
-	case string:
-		if n, err := strconv.Atoi(v); err == nil {
-			return time.Duration(n) * time.Second
-		}
-		return 60 * time.Second
-	default:
-		// Fallback using reflection
-		rv := reflect.ValueOf(i)
-		if rv.Kind() >= reflect.Int && rv.Kind() <= reflect.Int64 {
-			return time.Duration(rv.Int()) * time.Second
-		}
-		return 60 * time.Second
-	}
 }

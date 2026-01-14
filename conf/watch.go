@@ -16,7 +16,12 @@ func (p *Conf) Watch(filePath, xDnsPath string, sDnsPath string, reload func()) 
 		return fmt.Errorf("new watcher error: %s", err)
 	}
 	go func() {
-		var pre time.Time
+		var (
+			timer      *time.Timer
+			timerC     <-chan time.Time
+			lastName   string
+			lastChange time.Time
+		)
 		defer watcher.Close()
 		for {
 			select {
@@ -24,30 +29,45 @@ func (p *Conf) Watch(filePath, xDnsPath string, sDnsPath string, reload func()) 
 				if e.Has(fsnotify.Chmod) {
 					continue
 				}
-				if pre.Add(10 * time.Second).After(time.Now()) {
-					continue
+				// Debounce: editors often emit multiple events in bursts.
+				// Keep it single-goroutine and serial to avoid racey reload storms.
+				lastName = e.Name
+				lastChange = time.Now()
+				if timer == nil {
+					timer = time.NewTimer(1200 * time.Millisecond)
+					timerC = timer.C
+				} else {
+					if !timer.Stop() {
+						// Drain if needed
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					timer.Reset(1200 * time.Millisecond)
+					timerC = timer.C
 				}
-				pre = time.Now()
-				go func() {
-					time.Sleep(5 * time.Second)
-					switch filepath.Base(strings.TrimSuffix(e.Name, "~")) {
-					case filepath.Base(xDnsPath), filepath.Base(sDnsPath):
-						log.Println("DNS file changed, reloading...")
-					default:
-						log.Println("config file changed, reloading...")
-					}
-					*p = *New()
-					err := p.LoadFromPath(filePath)
-					if err != nil {
-						log.Printf("reload config error: %s", err)
-					}
-					reload()
-					log.Println("reload config success")
-				}()
 			case err := <-watcher.Errors:
 				if err != nil {
 					log.Printf("File watcher error: %s", err)
 				}
+			case <-timerC:
+				// Perform reload once per debounce window
+				name := filepath.Base(strings.TrimSuffix(lastName, "~"))
+				switch name {
+				case filepath.Base(xDnsPath), filepath.Base(sDnsPath):
+					log.Println("DNS file changed, reloading...")
+				default:
+					log.Println("config file changed, reloading...")
+				}
+
+				// Reset config in-place then reload from disk.
+				*p = *New()
+				if err := p.LoadFromPath(filePath); err != nil {
+					log.Printf("reload config error: %s", err)
+				}
+				reload()
+				log.Printf("reload config success (lastChange=%s)", lastChange.Format(time.RFC3339))
 			}
 		}
 	}()

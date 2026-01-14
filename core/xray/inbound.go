@@ -175,6 +175,10 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 			decryption := "none"
 			if nodeInfo.VAllss.Encryption != "" {
 				switch nodeInfo.VAllss.Encryption {
+				case "none", "aes-128-gcm", "chacha20-poly1305":
+					// Common VLESS decryption methods supported by Xray.
+					// Treat them as direct values.
+					decryption = nodeInfo.VAllss.Encryption
 				case "mlkem768x25519plus":
 					encSettings := nodeInfo.VAllss.EncryptionSettings
 					parts := []string{
@@ -235,11 +239,6 @@ func buildV2ray(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *coreCon
 		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.HTTPUPGRADESettings)
 		if err != nil {
 			return fmt.Errorf("unmarshal httpupgrade settings error: %s", err)
-		}
-	case "splithttp", "xhttp":
-		err := json.Unmarshal(v.NetworkSettings, &inbound.StreamSetting.SplitHTTPSettings)
-		if err != nil {
-			return fmt.Errorf("unmarshal xhttp settings error: %s", err)
 		}
 	default:
 		return errors.New("the network type is not vail")

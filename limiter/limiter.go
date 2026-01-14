@@ -36,7 +36,6 @@ type UserLimitInfo struct {
 	UID               int
 	SpeedLimit        int
 	DeviceLimit       int
-	ConnLimit         int
 	DynamicSpeedLimit int
 	ExpireTime        int64
 	OverLimit         bool
@@ -61,9 +60,6 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 		}
 		if users[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = users[i].DeviceLimit
-		}
-		if users[i].ConnLimit != 0 {
-			userLimit.ConnLimit = users[i].ConnLimit
 		}
 		userLimit.OverLimit = false
 		info.UserLimitInfo.Store(format.UserTag(tag, users[i].Uuid), userLimit)
@@ -110,9 +106,6 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		if added[i].DeviceLimit != 0 {
 			userLimit.DeviceLimit = added[i].DeviceLimit
 		}
-		if added[i].ConnLimit != 0 {
-			userLimit.ConnLimit = added[i].ConnLimit
-		}
 		userLimit.OverLimit = false
 		l.UserLimitInfo.Store(format.UserTag(tag, added[i].Uuid), userLimit)
 		l.UUIDtoUID[added[i].Uuid] = added[i].Id
@@ -145,12 +138,7 @@ func (l *Limiter) UpdateUserLimits(tag string, users []panel.UserInfo) {
 				}
 			}
 
-			// Update connection limit
-			// Note: Existing connections won't be immediately closed
-			// The new limit will be enforced when the next connection is made
-			if users[i].ConnLimit != userLimit.ConnLimit {
-				userLimit.ConnLimit = users[i].ConnLimit
-			}
+			// Connection limit is intentionally not supported (performance-first).
 		}
 	}
 }

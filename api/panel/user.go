@@ -15,7 +15,6 @@ type UserInfo struct {
 	Uuid        string `json:"uuid"`
 	SpeedLimit  int    `json:"speed_limit"`
 	DeviceLimit int    `json:"device_limit"`
-	ConnLimit   int    `json:"conn_limit"`
 }
 
 type UserListBody struct {

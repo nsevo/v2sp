@@ -2,6 +2,7 @@ package node
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/nsevo/v2sp/api/panel"
@@ -43,9 +44,28 @@ func NewController(server vCore.Core, api *panel.Client, config *conf.Options) *
 func (c *Controller) Start() error {
 	// First fetch Node Info
 	var err error
+	startedAt := time.Now()
 	node, err := c.apiClient.GetNodeInfo()
 	if err != nil {
 		return fmt.Errorf("get node info error: %s", err)
+	}
+	// Hard restrict supported node types for this project.
+	// Supported:
+	// - vless + reality + (tcp|grpc) only
+	if node == nil {
+		return fmt.Errorf("get node info error: empty response")
+	}
+	if node.Type != "vless" {
+		return fmt.Errorf("unsupported node_type: %s (supported: vless)", node.Type)
+	}
+	if node.Security != panel.Reality {
+		return fmt.Errorf("unsupported tls mode: %d (supported: reality)", node.Security)
+	}
+	if node.VAllss == nil {
+		return fmt.Errorf("invalid vless config: missing VAllss payload")
+	}
+	if node.VAllss.Network != "tcp" && node.VAllss.Network != "grpc" {
+		return fmt.Errorf("unsupported vless network: %s (supported: tcp, grpc)", node.VAllss.Network)
 	}
 	// Update user
 	c.userList, err = c.apiClient.GetUserList()
@@ -135,6 +155,20 @@ func (c *Controller) Start() error {
 
 	c.info = node
 	c.startTasks(node)
+	// Minimal baseline stats (once per node start)
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	log.WithFields(log.Fields{
+		"tag":        c.tag,
+		"node_id":    c.apiClient.NodeId,
+		"node_type":  c.apiClient.NodeType,
+		"users":      len(c.userList),
+		"alive_keys": len(c.aliveMap),
+		"goroutines": runtime.NumGoroutine(),
+		"heap_alloc": ms.HeapAlloc,
+		"sys":        ms.Sys,
+		"elapsed":    time.Since(startedAt).Truncate(time.Millisecond),
+	}).Info("Node controller started (baseline)")
 	return nil
 }
 

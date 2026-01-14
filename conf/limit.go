@@ -4,7 +4,6 @@ type LimitConfig struct {
 	EnableRealtime          bool                     `json:"EnableRealtime"`
 	SpeedLimit              int                      `json:"SpeedLimit"`
 	IPLimit                 int                      `json:"DeviceLimit"`
-	ConnLimit               int                      `json:"ConnLimit"`
 	EnableIpRecorder        bool                     `json:"EnableIpRecorder"`
 	IpRecorderConfig        *IpReportConfig          `json:"IpRecorderConfig"`
 	EnableDynamicSpeedLimit bool                     `json:"EnableDynamicSpeedLimit"`

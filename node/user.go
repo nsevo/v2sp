@@ -1,18 +1,24 @@
 package node
 
 import (
+	"time"
+
 	"github.com/nsevo/v2sp/api/panel"
 	log "github.com/sirupsen/logrus"
 )
 
 func (c *Controller) reportUserTrafficTask() (err error) {
+	roundStart := time.Now()
 	userTraffic, _ := c.server.GetUserTrafficSlice(c.tag, true)
 	if len(userTraffic) > 0 {
+		t0 := time.Now()
 		err = c.apiClient.ReportUserTraffic(userTraffic)
+		d := time.Since(t0)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"tag": c.tag,
 				"err": err,
+				"dur": d.Truncate(time.Millisecond),
 			}).Warn("Report user traffic failed")
 		} else {
 			log.WithField("tag", c.tag).Infof("Report %d users traffic", len(userTraffic))
@@ -62,6 +68,10 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 	}
 
 	userTraffic = nil
+	log.WithFields(log.Fields{
+		"tag": c.tag,
+		"dur": time.Since(roundStart).Truncate(time.Millisecond),
+	}).Debug("Report round finished (baseline)")
 	return nil
 }
 
@@ -86,8 +96,7 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added, updated []panel
 		if oldUser, exists := oldMap[newUser.Uuid]; exists {
 			// User exists, check if any limits have changed
 			limitsChanged := oldUser.SpeedLimit != newUser.SpeedLimit ||
-				oldUser.DeviceLimit != newUser.DeviceLimit ||
-				oldUser.ConnLimit != newUser.ConnLimit
+				oldUser.DeviceLimit != newUser.DeviceLimit
 
 			if limitsChanged {
 				// User limits changed, mark for update
